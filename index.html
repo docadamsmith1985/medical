@@ -82,9 +82,16 @@
         }
 
         ui.result.classList.remove("hidden");
-      } catch (err) {
-        alert((err && err.error) ? err.error : "Something went wrong. Try again.");
+           } catch (err) {
+        const msg =
+          err?.error?.message ||   // OpenAI-style { error: { message } }
+          err?.error ||            // our function might return { error: "..." }
+          err?.message ||          // generic JS error
+          JSON.stringify(err) ||   // last resort
+          "Something went wrong. Try again.";
+        alert(msg);
       }
+
     });
   </script>
 </body>
