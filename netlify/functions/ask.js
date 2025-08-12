@@ -16,19 +16,17 @@ async function callOpenAIWithBackoff(headers, payload, tries = 3) {
   return last;
 }
 
-// Netlify Function (CommonJS export)
+// Netlify Function (CommonJS)
 exports.handler = async function (event) {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
-  // 1) Validate input
   const { question } = JSON.parse(event.body || "{}");
   if (!question || question.trim().length < 10) {
     return { statusCode: 400, body: JSON.stringify({ error: "Please ask a longer question." }) };
   }
 
-  // 2) Read API key
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   if (!OPENAI_API_KEY) {
     return { statusCode: 500, body: JSON.stringify({ error: "Missing OPENAI_API_KEY" }) };
@@ -39,7 +37,7 @@ exports.handler = async function (event) {
     "Content-Type": "application/json"
   };
 
-  // 3) Moderation (optional but recommended)
+  // 1) Moderate the question (optional but recommended)
   try {
     const modRes = await fetch("https://api.openai.com/v1/moderations", {
       method: "POST",
@@ -57,7 +55,7 @@ exports.handler = async function (event) {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Moderation request failed" }) };
   }
 
-  // 4) Call the model with structured output (Responses API now uses text.format)
+  // 2) Ask the model with Structured Output (NOTE: text.format with name + schema)
   const schema = {
     type: "object",
     properties: {
@@ -82,11 +80,12 @@ exports.handler = async function (event) {
       { role: "system", content: sys },
       { role: "user", content: `Question: ${question}\nReturn JSON matching the schema keys.` }
     ],
-    // 👇 new format for structured outputs on the Responses API
     text: {
       format: {
         type: "json_schema",
-        json_schema: { name: "MedQA", strict: true, schema }
+        name: "MedQA",     // ← this 'name' fixes your current error
+        strict: true,
+        schema
       }
     }
   };
@@ -101,7 +100,7 @@ exports.handler = async function (event) {
     };
   }
 
-  // 5) Extract the JSON the Responses API returned
+  // 3) Pull the JSON result out of the Responses API shape
   let parsed;
   try {
     if (data.output_text) {
