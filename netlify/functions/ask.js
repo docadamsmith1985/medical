@@ -2,17 +2,16 @@
 
 // --- retry helper for 429 rate limits ---
 async function callOpenAIWithBackoff(headers, payload, tries = 3) {
-  let wait = 1000; // 1s → 2s → 4s
-  let last;
+  let wait = 1000, last;
   for (let i = 0; i < tries; i++) {
     const res = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
     });
-    if (res.status !== 429) return res; // success or non-429 error
+    if (res.status !== 429) return res;
     last = res;
-    await new Promise((r) => setTimeout(r, wait));
+    await new Promise(r => setTimeout(r, wait));
     wait *= 2;
   }
   return last;
@@ -27,54 +26,8 @@ function normalizeHistory(raw) {
   return clean.slice(-12); // ~6 Q/A turns
 }
 
-// Netlify Function (CommonJS)
-exports.handler = async function (event) {
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: "Method Not Allowed" };
-  }
-
-  let body;
-  try {
-    body = JSON.parse(event.body || "{}");
-  } catch {
-    return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Invalid JSON" }) };
-  }
-
-  const { question, history: rawHistory = [] } = body;
-  if (!question || question.trim().length < 10) {
-    return { statusCode: 400, body: JSON.stringify({ error: "Please ask a longer question." }) };
-  }
-
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  if (!OPENAI_API_KEY) {
-    return { statusCode: 500, body: JSON.stringify({ error: "Missing OPENAI_API_KEY" }) };
-  }
-
-  const headers = {
-    Authorization: `Bearer ${OPENAI_API_KEY}`,
-    "Content-Type": "application/json",
-  };
-
-  // 1) Moderate the NEW question only
-  try {
-    const modRes = await fetch("https://api.openai.com/v1/moderations", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model: "omni-moderation-latest", input: question }),
-    });
-    const modJson = await modRes.json();
-    if (!modRes.ok) {
-      return { statusCode: modRes.status, body: JSON.stringify({ ok: false, error: modJson?.error?.message || "Moderation failed" }) };
-    }
-    if (modJson.results?.[0]?.flagged) {
-      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Question blocked by moderation." }) };
-    }
-  } catch {
-    return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Moderation request failed" }) };
-  }
-
-  // 2) System prompt — Intake → Advice flow (1–2 questions per turn)
-  const sys = `
+function buildSystemPrompt(assistantTurns) {
+  return `
 System Prompt — Medical Information Chatbot
 
 You are a conversational medical information assistant.
@@ -92,12 +45,13 @@ Core Rules
 Conversation Flow
 
 A) Intake Stage — Acquire Information First
-- Ask IN SMALL BATCHES: **1–2 questions at a time only**. Keep each turn short.
-- Map the questions to the main complaint; across turns, aim to cover as relevant:
-  age; sex (and pregnancy/breastfeeding if relevant); onset & time course; location & character/quality; severity (0–10); triggers/relievers; associated symptoms; relevant history/meds/allergies; recent travel/exposures if relevant.
-- You may ask one additional small batch (again 1–2 questions) if answers are incomplete.
+- Ask IN SMALL BATCHES: **1–2 questions per turn only**. Keep each turn short.
+- Across turns, aim to cover as relevant: age; sex (and pregnancy/breastfeeding if relevant); onset & time course;
+  location & character/quality; severity (0–10); triggers/relievers; associated symptoms; relevant history/meds/allergies;
+  recent travel/exposures if relevant.
+- You may ask at most one additional small batch (again 1–2 questions) if answers are incomplete.
 - Do **not** list causes, treatments, or investigations until you have enough information — except if urgent red flags are detected.
-- **Formatting rule for intake:** place the first question in \`chat_reply\`. If you need a second question, put it in \`ask_back\`. Never exceed two total questions in a single turn.
+- **Formatting rule for intake:** put the first question in "chat_reply". If you need a second, put it in "ask_back". Never exceed two total questions in a single turn.
 
 B) Advice Stage — After You Have Enough Information
 - Start with a general safety statement:
@@ -124,18 +78,91 @@ Style Details
 
 Output Rules
 - Decide which stage you are in and set "stage" to "intake" or "advice".
-- **For intake:** return at most two questions total. Put the first in "chat_reply". If you need a second, put it in "ask_back"; otherwise leave "ask_back" as a short single question or empty string.
+- **For intake:** return at most two questions. Put the first in "chat_reply". If you need a second, put it in "ask_back"; otherwise leave "ask_back" empty.
 - **For advice:** fill the structured fields below. Keep "chat_reply" to 2–3 short sentences and use bullets for lists.
-`;
 
+Control
+- assistant_turns_in_history = ${assistantTurns}.
+- If assistant_turns_in_history >= 2: **switch to stage="advice" now** and do not ask more questions this turn.
+`;
+}
+
+// enforce no more than 2 questions in the UI output
+function enforceTwoQuestions(o) {
+  let cr = String(o.chat_reply || "");
+  let ab = String(o.ask_back || "");
+
+  // If chat_reply contains more than one '?', split and move the second to ask_back
+  const qParts = cr.split('?').map(s => s.trim()).filter(Boolean);
+  if (qParts.length > 1) {
+    cr = qParts[0] + '?';
+    ab = ab || (qParts[1] ? qParts[1] + '?' : '');
+  } else if (qParts.length === 1 && !cr.endsWith('?')) {
+    // If it's clearly a question but missing '?', leave as-is.
+  }
+
+  // If ask_back contains multiple questions, keep only the first
+  if ((ab.match(/\?/g) || []).length > 1) {
+    ab = ab.split('?').map(s => s.trim()).filter(Boolean)[0] + '?';
+  }
+
+  o.chat_reply = cr;
+  o.ask_back = ab;
+  return o;
+}
+
+// -------------------- Netlify handler --------------------
+exports.handler = async function (event) {
+  if (event.httpMethod !== "POST") {
+    return { statusCode: 405, body: "Method Not Allowed" };
+  }
+
+  let body;
+  try { body = JSON.parse(event.body || "{}"); }
+  catch { return { statusCode: 400, body: JSON.stringify({ ok:false, error:"Invalid JSON" }) }; }
+
+  const { question, history: rawHistory = [] } = body;
+  if (!question || question.trim().length < 10) {
+    return { statusCode: 400, body: JSON.stringify({ error: "Please ask a longer question." }) };
+  }
+
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  if (!OPENAI_API_KEY) {
+    return { statusCode: 500, body: JSON.stringify({ error: "Missing OPENAI_API_KEY" }) };
+  }
+
+  const headers = { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" };
+
+  // 1) Moderate the NEW question only
+  try {
+    const modRes = await fetch("https://api.openai.com/v1/moderations", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: "omni-moderation-latest", input: question }),
+    });
+    const modJson = await modRes.json();
+    if (!modRes.ok) {
+      return { statusCode: modRes.status, body: JSON.stringify({ ok:false, error: modJson?.error?.message || "Moderation failed" }) };
+    }
+    if (modJson.results?.[0]?.flagged) {
+      return { statusCode: 400, body: JSON.stringify({ ok:false, error: "Question blocked by moderation." }) };
+    }
+  } catch {
+    return { statusCode: 500, body: JSON.stringify({ ok:false, error: "Moderation request failed" }) };
+  }
+
+  // 2) Build conversation
   const history = normalizeHistory(rawHistory);
-  const messages = [
-    { role: "system", content: sys },
+  const assistantTurns = history.filter(t => t.role === "assistant").length;
+  const adviceNow = assistantTurns >= 2;
+
+  const baseMessages = [
+    { role: "system", content: buildSystemPrompt(assistantTurns) },
     ...history,
     { role: "user", content: question }
   ];
 
-  // 3) JSON schema (intake or advice)
+  // 3) JSON schema (ask_back now OPTIONAL to avoid crashes)
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -159,53 +186,70 @@ Output Rules
       red_flags: { type: "array", items: { type: "string" } },
       when_to_seek_help: { type: "string" }
     },
-    required: ["stage", "disclaimer", "chat_reply", "ask_back"]
+    required: ["stage", "chat_reply"] // ask_back no longer required (prevents crash)
   };
 
-  const payload = {
-    model: "gpt-4o-mini",
-    input: messages,
-    temperature: 0.2,
-    max_output_tokens: 700, // still generous, but keeps things tight
-    // Your account expects text.format for structured output
-    text: {
-      format: {
-        type: "json_schema",
-        name: "MedQA_IntakeOrAdvice",
-        schema,
-        strict: false
+  async function callOnce(forceAdvice = false) {
+    const messages = forceAdvice
+      ? [{ role: "system", content: 'CONTROL: Force advice now. Respond with stage="advice". Do not ask further questions this turn.' }, ...baseMessages]
+      : baseMessages;
+
+    const payload = {
+      model: "gpt-4o-mini",
+      input: messages,
+      temperature: 0.2,
+      max_output_tokens: 700,
+      // Your account expects text.format
+      text: {
+        format: {
+          type: "json_schema",
+          name: "MedQA_IntakeOrAdvice",
+          schema,
+          strict: false
+        }
       }
+    };
+
+    const res = await callOpenAIWithBackoff(headers, payload);
+    let data; try { data = await res.json(); } catch { data = null; }
+
+    function parseOut(d) {
+      try {
+        if (d?.output_text) return JSON.parse(d.output_text);
+        if (Array.isArray(d?.output)) {
+          const textItem = d.output[0]?.content?.find?.(c => c.type === "output_text" || c.type === "text");
+          if (textItem?.text) return JSON.parse(textItem.text);
+        }
+      } catch {}
+      return null;
     }
-  };
 
-  const res = await callOpenAIWithBackoff(headers, payload);
-  let data;
-  try { data = await res.json(); } catch { data = null; }
-
-  function parseOut(d) {
-    try {
-      if (d?.output_text) return JSON.parse(d.output_text);
-      if (Array.isArray(d?.output)) {
-        const textItem = d.output[0]?.content?.find?.(c => c.type === "output_text" || c.type === "text");
-        if (textItem?.text) return JSON.parse(textItem.text);
-      }
-    } catch {}
-    return null;
+    return { ok: res.ok, parsed: parseOut(data), raw: data, status: res.status };
   }
 
-  const parsed = parseOut(data);
+  // First attempt
+  let { ok, parsed, raw, status } = await callOnce(false);
 
-  if (!res.ok || !parsed) {
+  // If we’re past 2 assistant turns but the model still didn’t switch to advice, force it once
+  if ((!ok || !parsed || parsed.stage !== "advice") && adviceNow) {
+    ({ ok, parsed, raw, status } = await callOnce(true));
+  }
+
+  if (!ok || !parsed) {
     return {
-      statusCode: res.status || 502,
-      body: JSON.stringify({
-        ok: false,
-        error: data?.error?.message || "OpenAI response could not be parsed.",
-        raw: data
-      })
+      statusCode: status || 502,
+      body: JSON.stringify({ ok: false, error: raw?.error?.message || "OpenAI response could not be parsed.", raw })
     };
+  }
+
+  // Enforce max 2 questions in output
+  parsed = enforceTwoQuestions(parsed);
+
+  // Fill sensible defaults for advice if missing
+  if (parsed.stage === "advice") {
+    parsed.disclaimer = parsed.disclaimer || "General education only — not medical advice.";
+    parsed.final_reminder = parsed.final_reminder || (parsed.when_to_seek_help || "Please see a doctor for personalised advice.");
   }
 
   return { statusCode: 200, body: JSON.stringify({ ok: true, result: parsed }) };
 };
-
