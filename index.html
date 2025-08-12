@@ -2,299 +2,225 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Doc Adams Q&amp;A — Medical Education Only</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Doc Adams Q&A</title>
   <style>
-    :root{--muted:#6b7280}
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;max-width:820px;margin:36px auto;padding:0 16px;line-height:1.45}
-    header{display:flex;gap:14px;align-items:center;margin-bottom:10px}
-    header img{width:56px;height:56px;object-fit:cover;border-radius:12px;border:1px solid #eee}
-    h1{margin:0}
-    .tag{font-size:.9em;color:#111;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:999px;padding:4px 10px}
-    .disclaimer{background:#fff3cd;border:1px solid #ffe69c;padding:10px 12px;border-radius:10px;margin:10px 0 16px}
-    .chat{border:1px solid #eee;border-radius:12px;padding:12px;margin:12px 0;max-height:460px;overflow:auto;background:#fff}
-    .msg{margin:8px 0;padding:10px 12px;border-radius:12px;max-width:85%;white-space:pre-wrap}
-    .me{background:#eef6ff;margin-left:auto}
-    .bot{background:#f7f7f7}
-    textarea{width:100%;min-height:90px;padding:10px;border-radius:10px;border:1px solid #ddd}
-    .row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
-    .inputs{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;cursor:pointer;background:#fff}
-    .card{border:1px solid #eee;border-radius:12px;padding:12px;margin-top:14px;background:#fff}
-    .muted{color:var(--muted);font-size:.92em}
-    .hidden{display:none}
-    .chip{font-size:.85em;border:1px solid #ddd;border-radius:999px;padding:5px 9px;background:#fff}
-    .thumb{width:56px;height:56px;object-fit:cover;border:1px solid #e5e7eb;border-radius:8px}
-    .typing{display:inline-flex;align-items:center;gap:8px;color:var(--muted)}
-    .dot{width:6px;height:6px;border-radius:50%;background:#9ca3af;display:inline-block;animation:blink 1.3s infinite ease-in-out}
-    .dot:nth-child(2){animation-delay:.15s}.dot:nth-child(3){animation-delay:.3s}
-    @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
-    details summary{cursor:pointer}
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; background:#0b0f14; color:#e8eef5; }
+    .wrap { max-width: 820px; margin: 0 auto; padding: 24px; }
+    .card { background:#121924; border:1px solid #203042; border-radius: 14px; padding: 16px; margin: 12px 0; }
+    h1 { font-size: 1.6rem; margin: 0 0 10px; }
+    .disclaimer { font-size: .93rem; line-height:1.5; background:#0e1520; border:1px solid #27384e; padding:12px; border-radius:12px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; }
+    textarea { width:100%; min-height: 110px; resize: vertical; }
+    input, textarea, button { background:#0d1420; color:#e8eef5; border:1px solid #2a3c52; border-radius:10px; padding:10px 12px; }
+    button { cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .thumbs img { max-height: 72px; border-radius: 8px; border:1px solid #2a3c52; }
+    .typing { display:none; align-items:center; gap:8px; font-size:.95rem; color:#a9bed6; }
+    .dot { width:6px; height:6px; border-radius: 50%; background:#a9bed6; animation: blink 1.2s infinite ease-in-out; }
+    .dot:nth-child(2){animation-delay:.2s} .dot:nth-child(3){animation-delay:.4s}
+    @keyframes blink { 0%,80%,100%{opacity:.2} 40%{opacity:1} }
+    .err { color:#ff8c8c }
+    .section h3 { margin:.2rem 0 .2rem; font-size:1rem; color:#b9d1ea }
+    ul { margin:.2rem 0 .8rem 1.2rem; }
+    a { color:#8fc5ff; }
+    .refs a { display:block; overflow-wrap:anywhere; }
+    .chat { white-space:pre-wrap }
   </style>
 </head>
 <body>
-  <header>
-    <!-- Replace logo.png with your image file name or an absolute URL -->
-    <img id="brandImg" src="logo.png" alt="Doc Adams logo" onerror="this.style.display='none'">
-    <div>
-      <h1>Doc Adams Q&amp;A</h1>
-      <div class="muted">General medical education. Not a substitute for seeing a doctor.</div>
+  <div class="wrap">
+    <h1>Doc Adams Q&amp;A</h1>
+
+    <div class="disclaimer card">
+      <strong>Important:</strong> This AI was trained and instructed by Doc Adam to give <em>general education only</em>.
+      It can be wrong. It’s <strong>not medical advice</strong>, not a diagnosis, and not a treatment plan. Don’t ignore
+      or delay professional care because of something here. If you have concerning symptoms, <strong>see a doctor</strong>.
     </div>
-    <span class="tag">Education-only</span>
-  </header>
 
-  <div class="disclaimer">
-    <strong>Important:</strong> This assistant was guided by <em>Doc Adam</em>. However, AI can make mistakes or miss key details. Information here is for general education only — <strong>it is not medical advice</strong>, and must not replace an in-person assessment. If symptoms are new, severe, getting worse, or you’re worried, <strong>please see a doctor or go to ED</strong>.
-  </div>
+    <div class="card">
+      <label for="q"><strong>Your question</strong></label>
+      <textarea id="q" placeholder="Describe your concern in 1–2 sentences…"></textarea>
 
-  <!-- chat log -->
-  <div id="chat" class="chat"></div>
-
-  <form id="qform">
-    <label for="q" class="muted">Type your question or follow-up:</label>
-    <textarea id="q" placeholder="e.g., My head hurts — should I worry?" required minlength="5" maxlength="800"></textarea>
-
-    <div class="row">
-      <div class="inputs">
-        <input id="files" type="file" accept="image/*" multiple />
-        <span class="muted">Tip: only share non-identifying images (no faces/IDs). Max 3 images.</span>
+      <div class="row" style="margin-top:8px">
+        <input id="images" type="file" accept="image/*" multiple />
+        <button id="askBtn">Ask</button>
+        <button id="clearBtn" title="Clear conversation">Reset</button>
       </div>
-      <button type="submit" id="askBtn">Send</button>
-      <button type="button" id="newBtn" class="chip">New topic</button>
-      <span id="turns" class="muted"></span>
+      <div id="thumbs" class="thumbs row" style="margin-top:6px"></div>
+
+      <div id="typing" class="typing" style="margin-top:10px">
+        <span>Thinking</span>
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </div>
+      <div id="error" class="err"></div>
     </div>
 
-    <!-- thumbnails -->
-    <div id="thumbs" class="row"></div>
-  </form>
-
-  <!-- Education panel -->
-  <div id="result" class="card hidden">
-    <div id="disc" class="muted"></div>
-
-    <h3 style="margin:8px 0 6px">Possible causes</h3>
-    <ul id="causes"></ul>
-
-    <h3 style="margin:8px 0 6px">What you can try at home</h3>
-    <ul id="selfcare"></ul>
-
-    <h3 style="margin:8px 0 6px">Possible investigations</h3>
-    <ul id="investigations"></ul>
-
-    <h3 style="margin:8px 0 6px">Treatments a doctor might do</h3>
-    <ul id="treatments"></ul>
-
-    <h3 style="margin:8px 0 6px">Red flags</h3>
-    <ul id="flags"></ul>
-
-    <h3 style="margin:8px 0 6px">When to seek help</h3>
-    <div id="seek"></div>
-
-    <details style="margin-top:8px" id="refsWrap" class="hidden">
-      <summary>References</summary>
-      <ul id="refs"></ul>
-    </details>
+    <div id="chat" class="card chat"></div>
+    <div id="result" class="card" style="display:none"></div>
   </div>
 
   <script>
-    const chatEl = document.getElementById("chat");
-    const form   = document.getElementById("qform");
-    const btn    = document.getElementById("askBtn");
-    const newBtn = document.getElementById("newBtn");
-    const turnsEl= document.getElementById("turns");
-    const fileIn = document.getElementById("files");
-    const thumbs = document.getElementById("thumbs");
+    // --- simple client state ---
+    const history = []; // keep last ~6 turns compatible with your function
+    let imageDataUrls = [];
 
-    const ui = {
-      result: document.getElementById("result"),
-      disc: document.getElementById("disc"),
-      causes: document.getElementById("causes"),
-      selfcare: document.getElementById("selfcare"),
-      investigations: document.getElementById("investigations"),
-      treatments: document.getElementById("treatments"),
-      flags: document.getElementById("flags"),
-      seek: document.getElementById("seek"),
-      refsWrap: document.getElementById("refsWrap"),
-      refs: document.getElementById("refs"),
-    };
+    const qEl = document.getElementById('q');
+    const askBtn = document.getElementById('askBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const fileEl = document.getElementById('images');
+    const thumbsEl = document.getElementById('thumbs');
+    const typingEl = document.getElementById('typing');
+    const errorEl = document.getElementById('error');
+    const chatEl = document.getElementById('chat');
+    const resultEl = document.getElementById('result');
 
-    // ---- conversation history (saved locally for follow-ups) ----
-    let history = [];
-    try {
-      const saved = JSON.parse(localStorage.getItem("medqa_history") || "[]");
-      if (Array.isArray(saved)) history = saved.slice(-12);
-    } catch {}
-    updateTurns();
+    function showTyping(show){ typingEl.style.display = show ? 'flex' : 'none'; }
+    function setError(msg){ errorEl.textContent = msg || ''; }
 
-    function updateTurns(){ turnsEl.textContent = history.length ? `Context turns: ${history.length}` : ""; }
-    function saveHistory(){
-      try { localStorage.setItem("medqa_history", JSON.stringify(history.slice(-12))); } catch {}
-      updateTurns();
-    }
-
-    function addMsg(role, text){
-      const div = document.createElement("div");
-      div.className = `msg ${role === "user" ? "me" : "bot"}`;
-      div.textContent = text;
-      chatEl.appendChild(div);
+    function appendChat(role, text) {
+      const who = role === 'user' ? 'You' : 'Assistant';
+      const b = document.createElement('div');
+      b.innerHTML = `<strong>${who}:</strong> ${escapeHtml(text)}`;
+      chatEl.appendChild(b);
       chatEl.scrollTop = chatEl.scrollHeight;
-      return div;
     }
 
-    // typing indicator
-    function addTyping(){
-      const wrap = document.createElement("div");
-      wrap.className = "msg bot";
-      const t = document.createElement("span");
-      t.className = "typing";
-      t.innerHTML = `Thinking <span class="dot"></span><span class="dot"></span><span class="dot"></span>`;
-      wrap.appendChild(t);
-      chatEl.appendChild(wrap);
-      chatEl.scrollTop = chatEl.scrollHeight;
-      return wrap;
+    function escapeHtml(s){
+      return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
     }
 
-    let selectedImages = []; // data URLs
-    fileIn.addEventListener("change", async () => {
-      thumbs.innerHTML = "";
-      selectedImages = [];
-      const files = Array.from(fileIn.files || []).slice(0,3);
+    // Handle image selection -> data URLs (max 3)
+    fileEl.addEventListener('change', async (e) => {
+      imageDataUrls = [];
+      thumbsEl.innerHTML = '';
+      const files = Array.from(e.target.files || []).slice(0,3);
       for (const f of files) {
-        if (!f.type.startsWith("image/")) continue;
-        const dataUrl = await readAndResize(f, 1200);
-        selectedImages.push(dataUrl);
-        const img = document.createElement("img");
-        img.src = dataUrl; img.className = "thumb";
-        thumbs.appendChild(img);
+        if (!f.type.startsWith('image/')) continue;
+        // keep uploads small to avoid function limits
+        const dataUrl = await fileToDataUrl(f, 1600, 1600, 0.85);
+        imageDataUrls.push(dataUrl);
+        const img = document.createElement('img');
+        img.src = dataUrl;
+        thumbsEl.appendChild(img);
       }
     });
 
-    function readAndResize(file, maxDim=1200){
-      return new Promise((resolve) => {
+    function fileToDataUrl(file, maxW, maxH, quality){
+      return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => {
           const img = new Image();
           img.onload = () => {
-            const c = document.createElement("canvas");
-            const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-            c.width = Math.round(img.width * scale);
-            c.height = Math.round(img.height * scale);
-            const ctx = c.getContext("2d");
-            ctx.drawImage(img, 0, 0, c.width, c.height);
-            resolve(c.toDataURL("image/jpeg", 0.85)); // compressed JPEG
+            const {canvas, url} = downscale(img, maxW, maxH, quality);
+            resolve(url);
           };
+          img.onerror = reject;
           img.src = reader.result;
         };
+        reader.onerror = reject;
         reader.readAsDataURL(file);
       });
     }
 
-    newBtn.addEventListener("click", () => {
-      history = [];
-      saveHistory();
-      chatEl.innerHTML = "";
-      ui.result.classList.add("hidden");
-      document.getElementById("q").focus();
-    });
+    function downscale(img, maxW, maxH, q){
+      const r = Math.min(1, maxW / img.width, maxH / img.height);
+      const w = Math.round(img.width * r), h = Math.round(img.height * r);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      const url = canvas.toDataURL('image/jpeg', q ?? 0.9);
+      return {canvas, url};
+    }
 
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const question = document.getElementById("q").value.trim();
-      if (!question) return;
+    async function ask() {
+      setError('');
+      const question = (qEl.value || '').trim();
+      if (question.length < 10) {
+        setError('Please ask a longer question.');
+        return;
+      }
+      askBtn.disabled = true;
+      showTyping(true);
 
-      addMsg("user", question);
-      document.getElementById("q").value = "";
-
-      const typing = addTyping();
-      btn.disabled = true; btn.textContent = "Thinking…";
+      appendChat('user', question);
 
       try {
-        const r = await fetch("/.netlify/functions/ask", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question, history, images: selectedImages })
+        const res = await fetch('/api/ask', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            question,
+            history,
+            images: imageDataUrls
+          })
         });
-        const j = await r.json();
-        typing.remove();
-        if (!j.ok) throw j;
-
-        // chat bubble
-addMsg("assistant", chat_reply + (ask_back ? `\n\n${ask_back}` : ""));
-
-// education panel (only update a section if new content is provided)
-if (disclaimer) ui.disc.textContent = disclaimer;
-
-if (Array.isArray(possible_causes) && possible_causes.length) {
-  ui.causes.innerHTML = possible_causes.map(x => `<li>${x}</li>`).join("");
-  ui.result.classList.remove("hidden");
-}
-if (Array.isArray(self_care) && self_care.length) {
-  ui.selfcare.innerHTML = self_care.map(x => `<li>${x}</li>`).join("");
-  ui.result.classList.remove("hidden");
-}
-if (Array.isArray(investigations) && investigations.length) {
-  ui.investigations.innerHTML = investigations.map(x => `<li>${x}</li>`).join("");
-  ui.result.classList.remove("hidden");
-}
-if (Array.isArray(treatments) && treatments.length) {
-  ui.treatments.innerHTML = treatments.map(x => `<li>${x}</li>`).join("");
-  ui.result.classList.remove("hidden");
-}
-if (Array.isArray(red_flags) && red_flags.length) {
-  ui.flags.innerHTML = red_flags.map(f => `<li>${f}</li>`).join("");
-  ui.result.classList.remove("hidden");
-}
-if (when_to_seek_help && when_to_seek_help.trim()) {
-  ui.seek.textContent = when_to_seek_help;
-  ui.result.classList.remove("hidden");
-}
-if (Array.isArray(references) && references.length) {
-  ui.refsWrap.classList.remove("hidden");
-  ui.refs.innerHTML = references.map(r => `<li>${r}</li>`).join("");
-}
-
-
-        // chat-style nurse reply + optional follow-up
-        addMsg("assistant", chat_reply + (ask_back ? `\n\n${ask_back}` : ""));
-
-        // education panel (ordered sections)
-        ui.disc.textContent = disclaimer || "General education only.";
-        ui.causes.innerHTML = (possible_causes || []).map(x => `<li>${x}</li>`).join("");
-        ui.selfcare.innerHTML = (self_care || []).map(x => `<li>${x}</li>`).join("");
-        ui.investigations.innerHTML = (investigations || []).map(x => `<li>${x}</li>`).join("");
-        ui.treatments.innerHTML = (treatments || []).map(x => `<li>${x}</li>`).join("");
-        ui.flags.innerHTML = (red_flags || []).map(f => `<li>${f}</li>`).join("");
-        ui.seek.textContent = when_to_seek_help || "";
-        if (Array.isArray(references) && references.length) {
-          ui.refsWrap.classList.remove("hidden");
-          ui.refs.innerHTML = references.map(r => `<li>${r}</li>`).join("");
-        } else {
-          ui.refsWrap.classList.add("hidden");
-          ui.refs.innerHTML = "";
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || 'Request failed');
         }
-        ui.result.classList.remove("hidden");
 
-        // update history (short assistant summary)
-        history.push({ role: "user", content: question });
-        const summary = [
-          chat_reply || "",
-          possible_causes?.length ? `Causes: ${possible_causes.slice(0,4).join("; ")}` : "",
-          ask_back ? `Follow-up: ${ask_back}` : ""
-        ].filter(Boolean).join("\n").slice(0, 800);
-        history.push({ role: "assistant", content: summary });
-        history = history.slice(-12);
-        saveHistory();
+        const out = data.result; // structured JSON
+        const reply = out.chat_reply || '';
+        appendChat('assistant', reply);
 
-        // reset uploads for next turn (optional)
-        // selectedImages = []; thumbs.innerHTML = ""; fileIn.value = "";
+        // update short history (store text only)
+        history.push({ role:'user', content: question });
+        history.push({ role:'assistant', content: reply });
+        while (history.length > 12) history.shift();
 
+        // render sections for first answers
+        renderStructured(out);
       } catch (err) {
-        typing.remove();
-        const msg = err?.error?.message || err?.error || err?.message || JSON.stringify(err) || "Something went wrong. Try again.";
-        alert(msg);
+        console.error(err);
+        setError(err.message || 'Something went wrong.');
       } finally {
-        btn.disabled = false; btn.textContent = "Send";
+        showTyping(false);
+        askBtn.disabled = false;
+        qEl.value = '';
+        fileEl.value = '';
+        thumbsEl.innerHTML = '';
+        imageDataUrls = [];
       }
+    }
+
+    function renderStructured(o){
+      // If we only got a short follow-up, hide the big panel
+      const isFollow = !(o.possible_causes && o.self_care);
+      if (isFollow) { resultEl.style.display = 'none'; resultEl.innerHTML = ''; return; }
+
+      const list = (arr) => arr && arr.length
+        ? '<ul>' + arr.map(x => `<li>${escapeHtml(x)}</li>`).join('') + '</ul>'
+        : '<ul><li>—</li></ul>';
+
+      const refs = (o.references || []).map((r,i) => `<a href="${r}" target="_blank" rel="noopener">Reference ${i+1}</a>`).join('');
+
+      resultEl.innerHTML = `
+        <div class="section"><h3>Disclaimer</h3><div>${escapeHtml(o.disclaimer || '')}</div></div>
+        <div class="section"><h3>Possible causes</h3>${list(o.possible_causes || [])}</div>
+        <div class="section"><h3>Home care / self‑care</h3>${list(o.self_care || [])}</div>
+        <div class="section"><h3>Possible investigations</h3>${list(o.investigations || [])}</div>
+        <div class="section"><h3>Treatments a doctor might do</h3>${list(o.treatments || [])}</div>
+        <div class="section"><h3>Red flags</h3>${list(o.red_flags || [])}</div>
+        <div class="section"><h3>When to seek help</h3><div>${escapeHtml(o.when_to_seek_help || '')}</div></div>
+        <div class="section refs"><h3>References</h3>${refs || '<div>—</div>'}</div>
+        <div class="section"><h3>Follow‑up question for you</h3><div>${escapeHtml(o.ask_back || '')}</div></div>
+      `;
+      resultEl.style.display = 'block';
+    }
+
+    askBtn.addEventListener('click', ask);
+    qEl.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) ask();
+    });
+    clearBtn.addEventListener('click', () => {
+      history.length = 0;
+      chatEl.innerHTML = '';
+      resultEl.innerHTML = '';
+      resultEl.style.display = 'none';
+      setError('');
     });
   </script>
 </body>
