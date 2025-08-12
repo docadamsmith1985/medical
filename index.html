@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en">
 <head>
@@ -11,9 +10,11 @@
     .disclaimer{background:#fff3cd;border:1px solid #ffe69c;padding:10px 12px;border-radius:10px;margin:8px 0 16px}
     textarea{width:100%;min-height:120px;padding:10px;border-radius:10px;border:1px solid #ddd}
     button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;cursor:pointer}
+    .row{display:flex;gap:8px;align-items:center;margin-top:8px}
     .card{border:1px solid #eee;border-radius:12px;padding:12px;margin-top:14px}
     .muted{opacity:.8;font-size:.92em}
     .hidden{display:none}
+    .chip{font-size:.85em;border:1px solid #ddd;border-radius:999px;padding:5px 9px}
   </style>
 </head>
 <body>
@@ -23,8 +24,10 @@
   <form id="qform">
     <label for="q" class="muted">Your question (no personal info):</label>
     <textarea id="q" placeholder="e.g., 'Bakit namamaga at masakit ang big toe ko?'" required minlength="10" maxlength="800"></textarea>
-    <div style="margin-top:8px">
-      <button type="submit">Ask</button>
+    <div class="row">
+      <button type="submit" id="askBtn">Ask</button>
+      <button type="button" id="newBtn" class="chip">New topic</button>
+      <span id="turns" class="muted"></span>
     </div>
   </form>
 
@@ -44,6 +47,9 @@
 
   <script>
     const form = document.getElementById("qform");
+    const btn = document.getElementById("askBtn");
+    const newBtn = document.getElementById("newBtn");
+    const turnsEl = document.getElementById("turns");
     const ui = {
       result: document.getElementById("result"),
       disc: document.getElementById("disc"),
@@ -54,15 +60,38 @@
       refs: document.getElementById("refs"),
     };
 
+    // ---- conversation history (kept in memory + localStorage) ----
+    let history = [];
+    try {
+      const saved = JSON.parse(localStorage.getItem("medqa_history") || "[]");
+      if (Array.isArray(saved)) history = saved.slice(-12);
+    } catch {}
+
+    function saveHistory() {
+      try { localStorage.setItem("medqa_history", JSON.stringify(history.slice(-12))); } catch {}
+      turnsEl.textContent = history.length ? `Context turns: ${history.length}` : "";
+    }
+    saveHistory();
+
+    newBtn.addEventListener("click", () => {
+      history = [];
+      saveHistory();
+      ui.result.classList.add("hidden");
+      document.getElementById("q").value = "";
+      document.getElementById("q").focus();
+    });
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const question = document.getElementById("q").value.trim();
       ui.result.classList.add("hidden");
+      btn.disabled = true; btn.textContent = "Thinking…";
+
       try {
         const r = await fetch("/.netlify/functions/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question })
+          body: JSON.stringify({ question, history })
         });
         const j = await r.json();
         if (!j.ok) throw j;
@@ -80,18 +109,30 @@
           ui.refsWrap.classList.add("hidden");
           ui.refs.innerHTML = "";
         }
-
         ui.result.classList.remove("hidden");
-           } catch (err) {
+
+        // ---- add this Q/A to history so follow-ups carry context ----
+        history.push({ role: "user", content: question });
+        const assistantSummary = [
+          edu_answer || "",
+          red_flags?.length ? `Red flags: ${red_flags.join("; ")}` : "",
+          when_to_seek_help ? `When to seek help: ${when_to_seek_help}` : ""
+        ].filter(Boolean).join("\n");
+        history.push({ role: "assistant", content: assistantSummary.slice(0, 800) });
+        history = history.slice(-12);
+        saveHistory();
+
+      } catch (err) {
         const msg =
-          err?.error?.message ||   // OpenAI-style { error: { message } }
-          err?.error ||            // our function might return { error: "..." }
-          err?.message ||          // generic JS error
-          JSON.stringify(err) ||   // last resort
+          err?.error?.message ||
+          err?.error ||
+          err?.message ||
+          JSON.stringify(err) ||
           "Something went wrong. Try again.";
         alert(msg);
+      } finally {
+        btn.disabled = false; btn.textContent = "Ask";
       }
-
     });
   </script>
 </body>
