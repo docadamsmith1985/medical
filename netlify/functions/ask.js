@@ -31,7 +31,8 @@ exports.handler = async function (event) {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
-  const { question, history: rawHistory = [], images: rawImages = [] } = JSON.parse(event.body || "{}");
+  const { question, history: rawHistory = [], images: rawImages = [] } =
+    JSON.parse(event.body || "{}");
 
   if (!question || question.trim().length < 10) {
     return { statusCode: 400, body: JSON.stringify({ error: "Please ask a longer question." }) };
@@ -43,8 +44,8 @@ exports.handler = async function (event) {
   }
 
   const headers = {
-    "Authorization": `Bearer ${OPENAI_API_KEY}`,
-    "Content-Type": "application/json"
+    Authorization: `Bearer ${OPENAI_API_KEY}`,
+    "Content-Type": "application/json",
   };
 
   // 1) Moderate the NEW question only
@@ -52,14 +53,23 @@ exports.handler = async function (event) {
     const modRes = await fetch("https://api.openai.com/v1/moderations", {
       method: "POST",
       headers,
-      body: JSON.stringify({ model: "omni-moderation-latest", input: question })
+      body: JSON.stringify({ model: "omni-moderation-latest", input: question }),
     });
     const modJson = await modRes.json();
     if (!modRes.ok) {
-      return { statusCode: modRes.status, body: JSON.stringify({ ok: false, error: modJson?.error?.message || "Moderation failed" }) };
+      return {
+        statusCode: modRes.status,
+        body: JSON.stringify({
+          ok: false,
+          error: modJson?.error?.message || "Moderation failed",
+        }),
+      };
     }
     if (modJson.results?.[0]?.flagged) {
-      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Question blocked by moderation." }) };
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ ok: false, error: "Question blocked by moderation." }),
+      };
     }
   } catch {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Moderation request failed" }) };
@@ -81,14 +91,15 @@ exports.handler = async function (event) {
   const safeImages = Array.isArray(rawImages) ? rawImages.slice(0, 3) : [];
   for (const dataUrl of safeImages) {
     if (typeof dataUrl === "string" && dataUrl.startsWith("data:")) {
-      userContent.push({ type: "input_image", image_url: { url: dataUrl } });
+      // FIX: image_url must be a STRING, not { url: ... }
+      userContent.push({ type: "input_image", image_url: dataUrl });
     }
   }
 
   const messages = [
     { role: "system", content: sys },
-    ...history,                              // history uses simple string content
-    { role: "user", content: userContent }   // current turn can be multimodal
+    ...history, // prior turns as plain text messages
+    { role: "user", content: userContent }, // current turn can be multimodal
   ];
 
   // 3) Strict structured output (nurse-style sections)
@@ -105,7 +116,7 @@ exports.handler = async function (event) {
       red_flags: { type: "array", items: { type: "string" } },
       when_to_seek_help: { type: "string" },
       references: { type: "array", items: { type: "string" } },
-      ask_back: { type: "string" }             // one follow-up question
+      ask_back: { type: "string" },            // one follow-up question
     },
     required: [
       "disclaimer",
@@ -117,8 +128,8 @@ exports.handler = async function (event) {
       "red_flags",
       "when_to_seek_help",
       "references",
-      "ask_back"
-    ]
+      "ask_back",
+    ],
   };
 
   const payload = {
@@ -131,9 +142,9 @@ exports.handler = async function (event) {
         type: "json_schema",
         name: "DocAdamsMedQA",
         strict: true,
-        schema
-      }
-    }
+        schema,
+      },
+    },
   };
 
   const res = await callOpenAIWithBackoff(headers, payload);
@@ -142,9 +153,12 @@ exports.handler = async function (event) {
   if (!res.ok) {
     return {
       statusCode: res.status,
-      body: JSON.stringify({ ok: false, error: data?.error?.message || data?.message || "OpenAI request failed" })
+      body: JSON.stringify({
+        ok: false,
+        error: data?.error?.message || data?.message || "OpenAI request failed",
+      }),
     };
-  }
+    }
 
   // 4) Extract the JSON from the Responses API
   let parsed;
@@ -152,13 +166,15 @@ exports.handler = async function (event) {
     if (data.output_text) {
       parsed = JSON.parse(data.output_text);
     } else if (Array.isArray(data.output)) {
-      const textItem = data.output[0]?.content?.find?.(c => c.type === "output_text" || c.type === "text");
+      const textItem = data.output[0]?.content?.find?.(
+        (c) => c.type === "output_text" || c.type === "text"
+      );
       if (textItem?.text) parsed = JSON.parse(textItem.text);
     }
   } catch {}
 
   return {
     statusCode: 200,
-    body: JSON.stringify(parsed ? { ok: true, result: parsed } : { ok: false, raw: data })
+    body: JSON.stringify(parsed ? { ok: true, result: parsed } : { ok: false, raw: data }),
   };
 };
