@@ -3,51 +3,93 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Medical Q&A — Education Only</title>
+  <title>Doc Adams Q&amp;A — Medical Education Only</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;line-height:1.45}
-    h1{margin-bottom:6px}
-    .disclaimer{background:#fff3cd;border:1px solid #ffe69c;padding:10px 12px;border-radius:10px;margin:8px 0 16px}
-    .chat{border:1px solid #eee;border-radius:12px;padding:12px;margin:12px 0;max-height:420px;overflow:auto}
-    .msg{margin:8px 0;padding:10px 12px;border-radius:12px;max-width:85%}
+    :root{--muted:#6b7280}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;max-width:820px;margin:36px auto;padding:0 16px;line-height:1.45}
+    header{display:flex;gap:14px;align-items:center;margin-bottom:10px}
+    header img{width:56px;height:56px;object-fit:cover;border-radius:12px;border:1px solid #eee}
+    h1{margin:0}
+    .tag{font-size:.9em;color:#111;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:999px;padding:4px 10px}
+    .disclaimer{background:#fff3cd;border:1px solid #ffe69c;padding:10px 12px;border-radius:10px;margin:10px 0 16px}
+    .chat{border:1px solid #eee;border-radius:12px;padding:12px;margin:12px 0;max-height:460px;overflow:auto;background:#fff}
+    .msg{margin:8px 0;padding:10px 12px;border-radius:12px;max-width:85%;white-space:pre-wrap}
     .me{background:#eef6ff;margin-left:auto}
     .bot{background:#f7f7f7}
     textarea{width:100%;min-height:90px;padding:10px;border-radius:10px;border:1px solid #ddd}
-    .row{display:flex;gap:8px;align-items:center;margin-top:8px}
-    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;cursor:pointer}
-    .card{border:1px solid #eee;border-radius:12px;padding:12px;margin-top:14px}
-    .muted{opacity:.8;font-size:.92em}
+    .row{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+    .inputs{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;cursor:pointer;background:#fff}
+    .card{border:1px solid #eee;border-radius:12px;padding:12px;margin-top:14px;background:#fff}
+    .muted{color:var(--muted);font-size:.92em}
     .hidden{display:none}
-    .chip{font-size:.85em;border:1px solid #ddd;border-radius:999px;padding:5px 9px}
+    .chip{font-size:.85em;border:1px solid #ddd;border-radius:999px;padding:5px 9px;background:#fff}
+    .thumb{width:56px;height:56px;object-fit:cover;border:1px solid #e5e7eb;border-radius:8px}
+    .typing{display:inline-flex;align-items:center;gap:8px;color:var(--muted)}
+    .dot{width:6px;height:6px;border-radius:50%;background:#9ca3af;display:inline-block;animation:blink 1.3s infinite ease-in-out}
+    .dot:nth-child(2){animation-delay:.15s}.dot:nth-child(3){animation-delay:.3s}
+    @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
     details summary{cursor:pointer}
   </style>
 </head>
 <body>
-  <h1>Medical Q&amp;A <span class="muted">— general education only</span></h1>
-  <div class="disclaimer"><strong>Important:</strong> This is <em>not</em> medical advice. Huwag maglagay ng personal data (pangalan, address, birthday, photos). If you have new, severe, or worsening symptoms, see a doctor or go to ED.</div>
+  <header>
+    <!-- Replace logo.png with your image file name or an absolute URL -->
+    <img id="brandImg" src="logo.png" alt="Doc Adams logo" onerror="this.style.display='none'">
+    <div>
+      <h1>Doc Adams Q&amp;A</h1>
+      <div class="muted">General medical education. Not a substitute for seeing a doctor.</div>
+    </div>
+    <span class="tag">Education-only</span>
+  </header>
 
-  <!-- simple chat log -->
+  <div class="disclaimer">
+    <strong>Important:</strong> This assistant was guided by <em>Doc Adam</em>. However, AI can make mistakes or miss key details. Information here is for general education only — <strong>it is not medical advice</strong>, and must not replace an in-person assessment. If symptoms are new, severe, getting worse, or you’re worried, <strong>please see a doctor or go to ED</strong>.
+  </div>
+
+  <!-- chat log -->
   <div id="chat" class="chat"></div>
 
   <form id="qform">
     <label for="q" class="muted">Type your question or follow-up:</label>
     <textarea id="q" placeholder="e.g., My head hurts — should I worry?" required minlength="5" maxlength="800"></textarea>
+
     <div class="row">
+      <div class="inputs">
+        <input id="files" type="file" accept="image/*" multiple />
+        <span class="muted">Tip: only share non-identifying images (no faces/IDs). Max 3 images.</span>
+      </div>
       <button type="submit" id="askBtn">Send</button>
       <button type="button" id="newBtn" class="chip">New topic</button>
       <span id="turns" class="muted"></span>
     </div>
+
+    <!-- thumbnails -->
+    <div id="thumbs" class="row"></div>
   </form>
 
   <!-- Education panel -->
   <div id="result" class="card hidden">
     <div id="disc" class="muted"></div>
-    <h3 style="margin:8px 0 6px">Education</h3>
-    <div id="edu"></div>
-    <h4 style="margin:10px 0 6px">Red flags</h4>
+
+    <h3 style="margin:8px 0 6px">Possible causes</h3>
+    <ul id="causes"></ul>
+
+    <h3 style="margin:8px 0 6px">What you can try at home</h3>
+    <ul id="selfcare"></ul>
+
+    <h3 style="margin:8px 0 6px">Possible investigations</h3>
+    <ul id="investigations"></ul>
+
+    <h3 style="margin:8px 0 6px">Treatments a doctor might do</h3>
+    <ul id="treatments"></ul>
+
+    <h3 style="margin:8px 0 6px">Red flags</h3>
     <ul id="flags"></ul>
-    <h4 style="margin:10px 0 6px">When to seek help</h4>
+
+    <h3 style="margin:8px 0 6px">When to seek help</h3>
     <div id="seek"></div>
+
     <details style="margin-top:8px" id="refsWrap" class="hidden">
       <summary>References</summary>
       <ul id="refs"></ul>
@@ -60,10 +102,16 @@
     const btn    = document.getElementById("askBtn");
     const newBtn = document.getElementById("newBtn");
     const turnsEl= document.getElementById("turns");
+    const fileIn = document.getElementById("files");
+    const thumbs = document.getElementById("thumbs");
+
     const ui = {
       result: document.getElementById("result"),
       disc: document.getElementById("disc"),
-      edu: document.getElementById("edu"),
+      causes: document.getElementById("causes"),
+      selfcare: document.getElementById("selfcare"),
+      investigations: document.getElementById("investigations"),
+      treatments: document.getElementById("treatments"),
       flags: document.getElementById("flags"),
       seek: document.getElementById("seek"),
       refsWrap: document.getElementById("refsWrap"),
@@ -78,9 +126,7 @@
     } catch {}
     updateTurns();
 
-    function updateTurns(){
-      turnsEl.textContent = history.length ? `Context turns: ${history.length}` : "";
-    }
+    function updateTurns(){ turnsEl.textContent = history.length ? `Context turns: ${history.length}` : ""; }
     function saveHistory(){
       try { localStorage.setItem("medqa_history", JSON.stringify(history.slice(-12))); } catch {}
       updateTurns();
@@ -92,6 +138,55 @@
       div.textContent = text;
       chatEl.appendChild(div);
       chatEl.scrollTop = chatEl.scrollHeight;
+      return div;
+    }
+
+    // typing indicator
+    function addTyping(){
+      const wrap = document.createElement("div");
+      wrap.className = "msg bot";
+      const t = document.createElement("span");
+      t.className = "typing";
+      t.innerHTML = `Thinking <span class="dot"></span><span class="dot"></span><span class="dot"></span>`;
+      wrap.appendChild(t);
+      chatEl.appendChild(wrap);
+      chatEl.scrollTop = chatEl.scrollHeight;
+      return wrap;
+    }
+
+    let selectedImages = []; // data URLs
+    fileIn.addEventListener("change", async () => {
+      thumbs.innerHTML = "";
+      selectedImages = [];
+      const files = Array.from(fileIn.files || []).slice(0,3);
+      for (const f of files) {
+        if (!f.type.startsWith("image/")) continue;
+        const dataUrl = await readAndResize(f, 1200);
+        selectedImages.push(dataUrl);
+        const img = document.createElement("img");
+        img.src = dataUrl; img.className = "thumb";
+        thumbs.appendChild(img);
+      }
+    });
+
+    function readAndResize(file, maxDim=1200){
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            const c = document.createElement("canvas");
+            const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+            c.width = Math.round(img.width * scale);
+            c.height = Math.round(img.height * scale);
+            const ctx = c.getContext("2d");
+            ctx.drawImage(img, 0, 0, c.width, c.height);
+            resolve(c.toDataURL("image/jpeg", 0.85)); // compressed JPEG
+          };
+          img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+      });
     }
 
     newBtn.addEventListener("click", () => {
@@ -106,27 +201,37 @@
       e.preventDefault();
       const question = document.getElementById("q").value.trim();
       if (!question) return;
+
       addMsg("user", question);
       document.getElementById("q").value = "";
+
+      const typing = addTyping();
       btn.disabled = true; btn.textContent = "Thinking…";
 
       try {
         const r = await fetch("/.netlify/functions/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question, history })
+          body: JSON.stringify({ question, history, images: selectedImages })
         });
         const j = await r.json();
+        typing.remove();
         if (!j.ok) throw j;
 
-        const { disclaimer, chat_reply, edu_answer, red_flags, when_to_seek_help, references, ask_back } = j.result;
+        const {
+          disclaimer, chat_reply, possible_causes, self_care, investigations, treatments,
+          red_flags, when_to_seek_help, references, ask_back
+        } = j.result;
 
-        // show chat-style nurse reply + one follow-up question
+        // chat-style nurse reply + optional follow-up
         addMsg("assistant", chat_reply + (ask_back ? `\n\n${ask_back}` : ""));
 
-        // update education panel
+        // education panel (ordered sections)
         ui.disc.textContent = disclaimer || "General education only.";
-        ui.edu.textContent = edu_answer || "";
+        ui.causes.innerHTML = (possible_causes || []).map(x => `<li>${x}</li>`).join("");
+        ui.selfcare.innerHTML = (self_care || []).map(x => `<li>${x}</li>`).join("");
+        ui.investigations.innerHTML = (investigations || []).map(x => `<li>${x}</li>`).join("");
+        ui.treatments.innerHTML = (treatments || []).map(x => `<li>${x}</li>`).join("");
         ui.flags.innerHTML = (red_flags || []).map(f => `<li>${f}</li>`).join("");
         ui.seek.textContent = when_to_seek_help || "";
         if (Array.isArray(references) && references.length) {
@@ -138,14 +243,22 @@
         }
         ui.result.classList.remove("hidden");
 
-        // ---- add this turn to history (short assistant summary) ----
+        // update history (short assistant summary)
         history.push({ role: "user", content: question });
-        const assistantContent = (chat_reply + (ask_back ? `\nFollow-up asked: ${ask_back}` : "")).slice(0, 800);
-        history.push({ role: "assistant", content: assistantContent });
+        const summary = [
+          chat_reply || "",
+          possible_causes?.length ? `Causes: ${possible_causes.slice(0,4).join("; ")}` : "",
+          ask_back ? `Follow-up: ${ask_back}` : ""
+        ].filter(Boolean).join("\n").slice(0, 800);
+        history.push({ role: "assistant", content: summary });
         history = history.slice(-12);
         saveHistory();
 
+        // reset uploads for next turn (optional)
+        // selectedImages = []; thumbs.innerHTML = ""; fileIn.value = "";
+
       } catch (err) {
+        typing.remove();
         const msg = err?.error?.message || err?.error || err?.message || JSON.stringify(err) || "Something went wrong. Try again.";
         alert(msg);
       } finally {
