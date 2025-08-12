@@ -8,32 +8,41 @@
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;line-height:1.45}
     h1{margin-bottom:6px}
     .disclaimer{background:#fff3cd;border:1px solid #ffe69c;padding:10px 12px;border-radius:10px;margin:8px 0 16px}
-    textarea{width:100%;min-height:120px;padding:10px;border-radius:10px;border:1px solid #ddd}
-    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;cursor:pointer}
+    .chat{border:1px solid #eee;border-radius:12px;padding:12px;margin:12px 0;max-height:420px;overflow:auto}
+    .msg{margin:8px 0;padding:10px 12px;border-radius:12px;max-width:85%}
+    .me{background:#eef6ff;margin-left:auto}
+    .bot{background:#f7f7f7}
+    textarea{width:100%;min-height:90px;padding:10px;border-radius:10px;border:1px solid #ddd}
     .row{display:flex;gap:8px;align-items:center;margin-top:8px}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;cursor:pointer}
     .card{border:1px solid #eee;border-radius:12px;padding:12px;margin-top:14px}
     .muted{opacity:.8;font-size:.92em}
     .hidden{display:none}
     .chip{font-size:.85em;border:1px solid #ddd;border-radius:999px;padding:5px 9px}
+    details summary{cursor:pointer}
   </style>
 </head>
 <body>
   <h1>Medical Q&amp;A <span class="muted">— general education only</span></h1>
   <div class="disclaimer"><strong>Important:</strong> This is <em>not</em> medical advice. Huwag maglagay ng personal data (pangalan, address, birthday, photos). If you have new, severe, or worsening symptoms, see a doctor or go to ED.</div>
 
+  <!-- simple chat log -->
+  <div id="chat" class="chat"></div>
+
   <form id="qform">
-    <label for="q" class="muted">Your question (no personal info):</label>
-    <textarea id="q" placeholder="e.g., 'Bakit namamaga at masakit ang big toe ko?'" required minlength="10" maxlength="800"></textarea>
+    <label for="q" class="muted">Type your question or follow-up:</label>
+    <textarea id="q" placeholder="e.g., My head hurts — should I worry?" required minlength="5" maxlength="800"></textarea>
     <div class="row">
-      <button type="submit" id="askBtn">Ask</button>
+      <button type="submit" id="askBtn">Send</button>
       <button type="button" id="newBtn" class="chip">New topic</button>
       <span id="turns" class="muted"></span>
     </div>
   </form>
 
+  <!-- Education panel -->
   <div id="result" class="card hidden">
     <div id="disc" class="muted"></div>
-    <h3 style="margin:8px 0 6px">Answer</h3>
+    <h3 style="margin:8px 0 6px">Education</h3>
     <div id="edu"></div>
     <h4 style="margin:10px 0 6px">Red flags</h4>
     <ul id="flags"></ul>
@@ -46,10 +55,11 @@
   </div>
 
   <script>
-    const form = document.getElementById("qform");
-    const btn = document.getElementById("askBtn");
+    const chatEl = document.getElementById("chat");
+    const form   = document.getElementById("qform");
+    const btn    = document.getElementById("askBtn");
     const newBtn = document.getElementById("newBtn");
-    const turnsEl = document.getElementById("turns");
+    const turnsEl= document.getElementById("turns");
     const ui = {
       result: document.getElementById("result"),
       disc: document.getElementById("disc"),
@@ -60,31 +70,44 @@
       refs: document.getElementById("refs"),
     };
 
-    // ---- conversation history (kept in memory + localStorage) ----
+    // ---- conversation history (saved locally for follow-ups) ----
     let history = [];
     try {
       const saved = JSON.parse(localStorage.getItem("medqa_history") || "[]");
       if (Array.isArray(saved)) history = saved.slice(-12);
     } catch {}
+    updateTurns();
 
-    function saveHistory() {
-      try { localStorage.setItem("medqa_history", JSON.stringify(history.slice(-12))); } catch {}
+    function updateTurns(){
       turnsEl.textContent = history.length ? `Context turns: ${history.length}` : "";
     }
-    saveHistory();
+    function saveHistory(){
+      try { localStorage.setItem("medqa_history", JSON.stringify(history.slice(-12))); } catch {}
+      updateTurns();
+    }
+
+    function addMsg(role, text){
+      const div = document.createElement("div");
+      div.className = `msg ${role === "user" ? "me" : "bot"}`;
+      div.textContent = text;
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
 
     newBtn.addEventListener("click", () => {
       history = [];
       saveHistory();
+      chatEl.innerHTML = "";
       ui.result.classList.add("hidden");
-      document.getElementById("q").value = "";
       document.getElementById("q").focus();
     });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const question = document.getElementById("q").value.trim();
-      ui.result.classList.add("hidden");
+      if (!question) return;
+      addMsg("user", question);
+      document.getElementById("q").value = "";
       btn.disabled = true; btn.textContent = "Thinking…";
 
       try {
@@ -96,12 +119,16 @@
         const j = await r.json();
         if (!j.ok) throw j;
 
-        const { disclaimer, edu_answer, red_flags, when_to_seek_help, references } = j.result;
+        const { disclaimer, chat_reply, edu_answer, red_flags, when_to_seek_help, references, ask_back } = j.result;
+
+        // show chat-style nurse reply + one follow-up question
+        addMsg("assistant", chat_reply + (ask_back ? `\n\n${ask_back}` : ""));
+
+        // update education panel
         ui.disc.textContent = disclaimer || "General education only.";
         ui.edu.textContent = edu_answer || "";
         ui.flags.innerHTML = (red_flags || []).map(f => `<li>${f}</li>`).join("");
         ui.seek.textContent = when_to_seek_help || "";
-
         if (Array.isArray(references) && references.length) {
           ui.refsWrap.classList.remove("hidden");
           ui.refs.innerHTML = references.map(r => `<li>${r}</li>`).join("");
@@ -111,27 +138,18 @@
         }
         ui.result.classList.remove("hidden");
 
-        // ---- add this Q/A to history so follow-ups carry context ----
+        // ---- add this turn to history (short assistant summary) ----
         history.push({ role: "user", content: question });
-        const assistantSummary = [
-          edu_answer || "",
-          red_flags?.length ? `Red flags: ${red_flags.join("; ")}` : "",
-          when_to_seek_help ? `When to seek help: ${when_to_seek_help}` : ""
-        ].filter(Boolean).join("\n");
-        history.push({ role: "assistant", content: assistantSummary.slice(0, 800) });
+        const assistantContent = (chat_reply + (ask_back ? `\nFollow-up asked: ${ask_back}` : "")).slice(0, 800);
+        history.push({ role: "assistant", content: assistantContent });
         history = history.slice(-12);
         saveHistory();
 
       } catch (err) {
-        const msg =
-          err?.error?.message ||
-          err?.error ||
-          err?.message ||
-          JSON.stringify(err) ||
-          "Something went wrong. Try again.";
+        const msg = err?.error?.message || err?.error || err?.message || JSON.stringify(err) || "Something went wrong. Try again.";
         alert(msg);
       } finally {
-        btn.disabled = false; btn.textContent = "Ask";
+        btn.disabled = false; btn.textContent = "Send";
       }
     });
   </script>
