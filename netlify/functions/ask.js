@@ -1,4 +1,4 @@
-// Simple retry helper for 429 rate limits
+// --- retry helper for 429 rate limits ---
 async function callOpenAIWithBackoff(headers, payload, tries = 3) {
   let wait = 1000; // 1s → 2s → 4s
   let last;
@@ -16,14 +16,25 @@ async function callOpenAIWithBackoff(headers, payload, tries = 3) {
   return last;
 }
 
+// Small sanitizer: keep only recent turns, trim long text
+function normalizeHistory(raw) {
+  if (!Array.isArray(raw)) return [];
+  const clean = raw
+    .filter(t => t && (t.role === "user" || t.role === "assistant") && typeof t.content === "string")
+    .map(t => ({ role: t.role, content: t.content.slice(0, 800) }));
+  // keep last 12 messages (≈ 6 Q/A turns)
+  return clean.slice(-12);
+}
+
 // Netlify Function (CommonJS)
 exports.handler = async function (event) {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
-  const { question } = JSON.parse(event.body || "{}");
-  if (!question || question.trim().length < 10) {
+  const { question, history: rawHistory = [] } = JSON.parse(event.body || "{}");
+
+  if (!question || typeof question !== "string" || question.trim().length < 10) {
     return { statusCode: 400, body: JSON.stringify({ error: "Please ask a longer question." }) };
   }
 
@@ -37,7 +48,7 @@ exports.handler = async function (event) {
     "Content-Type": "application/json"
   };
 
-  // 1) Moderate the question (optional but recommended)
+  // 1) Moderate ONLY the new question
   try {
     const modRes = await fetch("https://api.openai.com/v1/moderations", {
       method: "POST",
@@ -55,7 +66,17 @@ exports.handler = async function (event) {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Moderation request failed" }) };
   }
 
-  // 2) Ask the model with Structured Output (Responses API uses text.format)
+  // 2) Build conversation messages
+  const sys = `You are a cautious medical educator (PH + AU audience).
+- Provide general education only; do NOT give personal medical advice.
+- Short, clear language. Bullet points when helpful.
+- Always include a strong disclaimer and “see a doctor” guidance for red flags.
+- Do not request or use personal identifiers (names, DOB, addresses, photos).`;
+
+  const history = normalizeHistory(rawHistory);
+  const messages = [{ role: "system", content: sys }, ...history, { role: "user", content: question }];
+
+  // 3) Structured Output schema (strict)
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -66,22 +87,14 @@ exports.handler = async function (event) {
       when_to_seek_help: { type: "string" },
       references: { type: "array", items: { type: "string" } }
     },
-    // 👇 strict requires every property to appear here:
     required: ["disclaimer", "edu_answer", "red_flags", "when_to_seek_help", "references"]
   };
 
-  const sys = `You are a cautious medical educator (PH + AU audience).
-- Provide general education only; do NOT give personal medical advice.
-- Short, clear language. Bullet points when helpful.
-- Always include a strong disclaimer and “see a doctor” guidance for red flags.
-- Do not request or use personal identifiers (names, DOB, addresses, photos).`;
-
   const payload = {
     model: "gpt-4o-mini",
-    input: [
-      { role: "system", content: sys },
-      { role: "user", content: `Question: ${question}\nReturn JSON matching the schema keys.` }
-    ],
+    input: messages,
+    temperature: 0.2,
+    max_output_tokens: 900,
     text: {
       format: {
         type: "json_schema",
@@ -102,15 +115,13 @@ exports.handler = async function (event) {
     };
   }
 
-  // 3) Pull the JSON result out of the Responses API shape
+  // 4) Pull the JSON result out of the Responses API
   let parsed;
   try {
     if (data.output_text) {
       parsed = JSON.parse(data.output_text);
     } else if (Array.isArray(data.output)) {
-      const textItem = data.output[0]?.content?.find?.(
-        c => c.type === "output_text" || c.type === "text"
-      );
+      const textItem = data.output[0]?.content?.find?.(c => c.type === "output_text" || c.type === "text");
       if (textItem?.text) parsed = JSON.parse(textItem.text);
     }
   } catch {}
