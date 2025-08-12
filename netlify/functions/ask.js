@@ -90,7 +90,7 @@ exports.handler = async function (event) {
 - This is a FOLLOW-UP in the same conversation.
 - Be brief (2–4 sentences), conversational, and do NOT repeat earlier long lists unless specifically asked.
 - Add NEW or clarifying info only, and finish with ONE short, targeted question to move the triage forward.
-- If new red-flag features are suggested, briefly point them out.`;
+- If the user re-asks something already answered, acknowledge briefly and progress the triage.`;
 
   const sys = isFollowUp ? sysFollowup : sysInitial;
 
@@ -99,7 +99,7 @@ exports.handler = async function (event) {
   const safeImages = Array.isArray(rawImages) ? rawImages.slice(0, 3) : [];
   for (const dataUrl of safeImages) {
     if (typeof dataUrl === "string" && dataUrl.startsWith("data:")) {
-      // image_url must be a STRING
+      // image_url must be a STRING (not { url: ... })
       userContent.push({ type: "input_image", image_url: dataUrl });
     }
   }
@@ -111,6 +111,8 @@ exports.handler = async function (event) {
   ];
 
   // 3) Structured outputs
+
+  // Full first-turn schema
   const schemaInitial = {
     type: "object",
     additionalProperties: false,
@@ -133,18 +135,15 @@ exports.handler = async function (event) {
     ]
   };
 
-  // Follow-ups: only short reply + one question; all other fields optional
+  // Minimal follow-up schema to keep answers concise (strict:true requires all props to be required)
   const schemaFollowup = {
     type: "object",
     additionalProperties: false,
     properties: {
-      disclaimer: { type: "string" },
-      chat_reply: { type: "string" },
-      ask_back: { type: "string" },
-      notes: { type: "array", items: { type: "string" } },   // optional quick bullets if needed
-      red_flags: { type: "array", items: { type: "string" } } // optional if NEW red flags arise
+      chat_reply: { type: "string" }, // 2–4 sentences, new info only
+      ask_back:  { type: "string" }   // one targeted question
     },
-    required: ["chat_reply","ask_back"]
+    required: ["chat_reply", "ask_back"]
   };
 
   const schema = isFollowUp ? schemaFollowup : schemaInitial;
