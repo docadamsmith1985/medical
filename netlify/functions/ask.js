@@ -1,8 +1,8 @@
 // netlify/functions/ask.js
 
 // === knobs ===
-const MAX_INTAKE_TURNS = 2; // ask one concise question per turn, then switch to advice
-const ADVICE_WORD_LIMIT = 220; // keep advice tight & readable
+const MAX_INTAKE_TURNS = 2;      // one short question per turn, then advice
+const ADVICE_WORD_LIMIT = 200;   // aim for concise, readable advice
 
 // --- retry helper for 429 rate limits ---
 async function callOpenAIWithBackoff(headers, payload, tries = 3) {
@@ -38,7 +38,24 @@ function inferTopic(userText, history) {
   if (/\b(stomach|tummy|belly|abd(omen|ominal)|epigastr)\b/.test(txt)) return "symptom_abdominal";
   if (/\b(height|tall|short|growth|stature|small for age|grow taller)\b/.test(txt)) return "growth_development";
   if (/\b(chest pain|breathless|shortness of breath|wheeze|asthma)\b/.test(txt)) return "symptom_cardioresp";
+  if (/\bpregnan|pregnancy|pregnant|breastfeed|lactat/i.test(txt)) return "pregnancy_related";
   return "other";
+}
+
+// ---- crude red-flag detector to nudge the model to urgent advice ----
+function detectUrgency(userText) {
+  const s = String(userText || "").toLowerCase();
+  const patterns = [
+    /severe chest pain|crushing chest|pain to left arm|shortness of breath|breathless|can't breathe/,
+    /stroke|face droop|slurred speech|weakness one side/,
+    /faint(ed|ing)|passed out|collapse/,
+    /anaphylaxis|throat closing|lip swelling|hives all over|wheezing/,
+    /suicid(al|e)|self[- ]harm|want to die/,
+    /pregnan\w+.*(bleeding|severe pain|reduced movements)/,
+    /high fever.*(confusion|rash)/,
+    /major trauma|car crash|serious injury/,
+  ];
+  return patterns.some(rx => rx.test(s));
 }
 
 // --- topic-aware fallback (so we never send an empty bubble) ---
@@ -72,6 +89,10 @@ function fallbackQuestion(step, userText = "", topic = "other") {
       "How tall are you now, and roughly how much have you grown in the last 6–12 months?",
       "Have you started puberty changes yet (e.g., growth spurt, periods, voice change)? If you know, what are your parents’ heights?"
     ],
+    pregnancy_related: [
+      "How many weeks pregnant are you, and what symptoms are you noticing?",
+      "Any bleeding, severe pain, or reduced baby movements?"
+    ],
     other: [
       "When did this start—sudden or gradual?",
       "How severe is it (0–10), and what makes it better or worse?"
@@ -87,50 +108,76 @@ function topicAllowsPainScale(topic) {
   return ["symptom_headache","symptom_abdominal","symptom_cardioresp","symptom_rash","other"].includes(topic);
 }
 
-// --- build the system prompt (teach-back advice, personalised) ---
-function buildSystemPrompt(assistantTurns, topicHint) {
+// --- sanitize advice to remove dosing/imperatives and keep general tone ---
+function sanitizeAdvice(text = "") {
+  let t = String(text);
+
+  // Strip explicit dosing / % / units
+  t = t.replace(/\b\d+\s?(mg|mcg|g|ml|units?|%|mcL|mL|IU)\b/gi, "a doctor-directed dose");
+  // Strip timed regimens (e.g., 15–20 minutes, 3x/day)
+  t = t.replace(/\b\d+(\s?–|-| to )\d+\s?(minutes?|hours?|hrs?)\b/gi, "a short time");
+  t = t.replace(/\b\d+\s?(minutes?|hours?|hrs?)\b/gi, "a short time");
+  t = t.replace(/\b(\d+|one|two|three|four)\s?(x|times?)\/(day|night|week)\b/gi, "regularly as advised by a clinician");
+
+  // De-imperativize common starts (line or bullet)
+  t = t.replace(/(^|\n)\s*[-•]?\s*(Take|Use|Apply|Start|Stop|Begin|Increase|Decrease|Avoid|Ice|Elevate|Rest|Wear|Do)\b/gi,
+                (m, pfx, verb) => `${pfx}• People sometimes ${verb.toLowerCase()}… (discuss with your doctor)`);
+
+  // You should/need to → consider discussing
+  t = t.replace(/\b(you (should|need to|must))\b/gi, "it may be worth discussing with your doctor whether you could");
+
+  // Tighten whitespace
+  t = t.replace(/\n{3,}/g, "\n\n");
+  return t.trim();
+}
+
+// --- build the system prompt (teach-back, safer framing) ---
+function buildSystemPrompt(assistantTurns, topicHint, urgent) {
   return `
 You are a conversational medical information assistant for general education.
 
-Goals
-1) Ask a few short, **topic-relevant** questions first.
-2) Then give a **clear, teach-back style** explanation that is **personalised** to the user's details and limited to ~${ADVICE_WORD_LIMIT} words.
+Safety & Scope
+- Education only. You can make mistakes. Not a medical service, diagnosis, or treatment plan.
+- Never give dosing, schedules, or prescriptive instructions. No brand/dose recommendations.
+- Use non-directive language: “could”, “sometimes”, “worth discussing with your doctor”.
+- If clear emergency red flags, prioritise an urgent-care warning with the reason.
 
-Core Rules
-- Calm, respectful, concise, conversational.
-- Education only. You can make mistakes. Not medical advice, diagnosis, or prescription.
-- Never ask for personal identifiers (full name, exact address).
-- If red flags (e.g., severe/worsening chest pain, breathing trouble, stroke signs, sepsis signs, suicidal thoughts, pregnancy emergencies, anaphylaxis, major trauma), give an urgent-care warning and why.
+Intake (short, topic-relevant)
+- Infer topic_type from: ["growth_development","symptom_headache","symptom_abdominal","symptom_rash","symptom_cardioresp","vitamin_or_med","lab_test","pregnancy_related","other"].
+- Use hint: topic_hint="${topicHint}".
+- Ask **exactly ONE short question (<25 words)** per turn, tailored to topic_type.
+- Do NOT ask 0–10 severity unless topic is pain/itch/breathing.
+- Output during intake: put the single question in "chat_reply"; leave "ask_back" empty.
 
-Topic & Intake
-- Infer topic_type from: ["growth_development","symptom_headache","symptom_abdominal","symptom_rash","symptom_cardioresp","vitamin_or_med","lab_test","other"].
-- Use hint: topic_hint="${topicHint}" when helpful.
-- Intake: ask **exactly ONE short question (<25 words)** per turn, tailored to topic_type.
-  • Do NOT use a 0–10 severity scale unless topic is a pain/itch/breathing symptom.
-  • For growth_development, focus on growth velocity, puberty status, parents’ heights, nutrition/sleep, chronic-illness clues.
-- Output during intake: place the single question in "chat_reply"; leave "ask_back" empty.
-
-Advice (teach-back; personalised; compact)
-- Start with a one-line safety statement (education only).
-- Then produce **advice_text** (<= ${ADVICE_WORD_LIMIT} words) following this exact outline:
-  1) **What I think so far** — recap using at least **two specifics** the user gave (e.g., duration, location, severity, key symptoms).
-  2) **What it could be** — up to **3 likely causes** (plain English) with brief "because you mentioned …" links.
-  3) **What you can do now** — **2–3 practical steps** and a **one-line why** for each.
-  4) **What a doctor might do** — 2–3 common options/tests (no personal dosing).
-  5) **Watch-outs** — **specific urgent signs** for this scenario.
-  6) **Next step** — a single friendly line: “Please see a doctor for personalised advice.”
-- Keep "chat_reply" to a **2–3 sentence intro**; put most of the content in "advice_text".
-- Use plain English first; add brief medical terms in brackets only if helpful.
-- Avoid certainty (“could be”, “sometimes”, “worth discussing with your doctor”).
-- Be empathetic if the user sounds distressed.
+Advice (teach-back; personalised but not prescriptive; max ~${ADVICE_WORD_LIMIT} words)
+- Open with: "I can’t give a specific diagnosis or treatment for you. This is general education only. I can share possibilities and ideas to discuss with your doctor."
+- Then produce **advice_text** with this outline:
+  1) **What I think so far** — recap using at least **two specifics** the user gave.
+  2) **What it could be (in general)** — up to **3** likely causes, each linked to their details.
+  3) **Ideas to discuss with your doctor** — 2–3 general options/tests; no doses/schedules.
+  4) **Comfort-only tips (not a treatment plan)** — 2–3 gentle, non-directive measures.
+  5) **Watch-outs (urgent)** — targeted red flags.
+  6) **Info your doctor may ask/check** — up to 3 items.
+  7) **Next step** — “Please see a doctor for personalised advice.”
+- Keep "chat_reply" to a **2–3 sentence intro**; place most content in "advice_text".
 
 Output JSON
 - stage: "intake" or "advice"
 - topic_type
-- chat_reply (intake: the one question; advice: 2–3 sentence intro)
-- advice_text (the compact teach-back)
-- summary (1–2 lines recap)  // for analytics/fallback
-- possible_causes[], typical_treatments[], common_investigations[], self_care[], urgent_triggers[], final_reminder
+- chat_reply
+- advice_text
+- summary (1–2-line recap)
+- info_gaps[] (things a doctor may ask/check)
+- urgent_triggers[] (watch-outs)
+- final_reminder
+- disclaimer (optional; you may include a compact one-liner)
+
+Control
+- assistant_turns_in_history = ${assistantTurns}
+- urgent_flag = ${urgent ? "true" : "false"}
+- If urgent_flag is true → stage="advice" now with a clear urgent message.
+- Else if assistant_turns_in_history < ${MAX_INTAKE_TURNS} → stage="intake".
+- Else → stage="advice".
 `;
 }
 
@@ -159,7 +206,6 @@ exports.handler = async function (event) {
   catch { return { statusCode: 400, body: JSON.stringify({ ok:false, error:"Invalid JSON" }) }; }
 
   const { question, history: rawHistory = [] } = body;
-  // allow very short replies like "7/10"
   if (!question || question.trim().length < 2) {
     return { statusCode: 400, body: JSON.stringify({ error: "Please add a bit more detail." }) };
   }
@@ -193,15 +239,16 @@ exports.handler = async function (event) {
   const history = normalizeHistory(rawHistory);
   const assistantTurns = history.filter(t => t.role === "assistant").length;
   const topicHint = inferTopic(question, history);
+  const urgentFlag = detectUrgency(question);
 
   const baseMessages = [
-    { role: "system", content: buildSystemPrompt(assistantTurns, topicHint) },
-    { role: "system", content: `CONTROL: topic_hint="${topicHint}". Ask ONE short question next unless already at advice.` },
+    { role: "system", content: buildSystemPrompt(assistantTurns, topicHint, urgentFlag) },
+    { role: "system", content: `CONTROL: topic_hint="${topicHint}". Ask ONE short question unless stage="advice".` },
     ...history,
     { role: "user", content: question }
   ];
 
-  // 3) JSON schema (advice_text added; ask_back optional)
+  // 3) JSON schema
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -210,23 +257,18 @@ exports.handler = async function (event) {
       topic_type: { type: "string" },
       disclaimer: { type: "string" },
       chat_reply: { type: "string" },
-      ask_back: { type: "string" },
       advice_text: { type: "string" },
       summary: { type: "string" },
-      possible_causes: { type: "array", items: { type: "string" } },
-      typical_treatments: { type: "array", items: { type: "string" } },
-      common_investigations: { type: "array", items: { type: "string" } },
-      self_care: { type: "array", items: { type: "string" } },
+      info_gaps: { type: "array", items: { type: "string" } },
       urgent_triggers: { type: "array", items: { type: "string" } },
-      final_reminder: { type: "string" },
-      references: { type: "array", items: { type: "string" } }
+      final_reminder: { type: "string" }
     },
     required: ["stage", "chat_reply"]
   };
 
   async function callOnce(forceAdvice = false) {
     const messages = forceAdvice
-      ? [{ role: "system", content: 'CONTROL: Respond with stage="advice" now. Produce advice_text (<= ' + ADVICE_WORD_LIMIT + ' words) tied to the user specifics. No further questions this turn.' }, ...baseMessages]
+      ? [{ role: "system", content: 'CONTROL: Respond with stage="advice" now. Produce advice_text (<= ' + ADVICE_WORD_LIMIT + ' words), non-prescriptive, tied to the user specifics.' }, ...baseMessages]
       : baseMessages;
 
     const payload = {
@@ -237,7 +279,7 @@ exports.handler = async function (event) {
       text: {
         format: {
           type: "json_schema",
-          name: "MedQA_TeachBack",
+          name: "MedQA_SaferTeachBack",
           schema,
           strict: false
         }
@@ -263,8 +305,8 @@ exports.handler = async function (event) {
   // First attempt
   let { ok, parsed, raw, status } = await callOnce(false);
 
-  // Force advice after MAX_INTAKE_TURNS if model didn't switch
-  if ((!ok || !parsed || parsed.stage !== "advice") && assistantTurns >= MAX_INTAKE_TURNS) {
+  // Force advice after MAX_INTAKE_TURNS
+  if ((!ok || !parsed || parsed.stage !== "advice") && (urgentFlag || assistantTurns >= MAX_INTAKE_TURNS)) {
     ({ ok, parsed, raw, status } = await callOnce(true));
   }
 
@@ -272,9 +314,12 @@ exports.handler = async function (event) {
   if (!ok || !parsed) {
     const step = Math.min(assistantTurns, MAX_INTAKE_TURNS - 1);
     const safe = {
-      stage: "intake",
+      stage: urgentFlag ? "advice" : "intake",
       topic_type: topicHint,
-      chat_reply: fallbackQuestion(step, question, topicHint),
+      chat_reply: urgentFlag
+        ? "This sounds potentially urgent. If you have severe pain, trouble breathing, fainting, or stroke-like symptoms, please seek urgent care now."
+        : fallbackQuestion(step, question, topicHint),
+      advice_text: urgentFlag ? "This is general education only. If symptoms are severe, new, or rapidly worsening—especially chest pain, breathing trouble, one-sided weakness, heavy bleeding, or signs of a severe allergic reaction—seek emergency care now or call local emergency services." : undefined,
       disclaimer: "General education only — not medical advice."
     };
     return { statusCode: 200, body: JSON.stringify({ ok:true, result: safe, raw }) };
@@ -286,28 +331,23 @@ exports.handler = async function (event) {
     parsed = enforceOneQuestion(parsed, Math.min(assistantTurns, MAX_INTAKE_TURNS - 1), question, topic);
   }
 
-  // Advice: ensure defaults and tighten/guard advice_text
+  // Advice: ensure defaults + sanitize language
   if (parsed.stage === "advice") {
-    parsed.disclaimer = parsed.disclaimer || "General education only — not medical advice.";
-
-    // If advice_text missing/too sparse, construct a compact fallback from fields we do have
-    const txt = (parsed.advice_text || "").trim();
-    if (!txt || txt.split(/\s+/).length < 30) {
-      const parts = [];
-      if (parsed.summary) parts.push(`What I think so far — ${parsed.summary}`);
-      if (Array.isArray(parsed.possible_causes) && parsed.possible_causes.length) {
-        parts.push(`What it could be\n- ${parsed.possible_causes.slice(0,3).join("\n- ")}`);
-      }
-      if (Array.isArray(parsed.self_care) && parsed.self_care.length) {
-        parts.push(`What you can do now\n- ${parsed.self_care.slice(0,3).join("\n- ")}`);
-      }
-      if (Array.isArray(parsed.common_investigations) && parsed.common_investigations.length) {
-        parts.push(`What a doctor might do\n- ${parsed.common_investigations.slice(0,3).join("\n- ")}`);
-      }
-      const watch = parsed.urgent_triggers || [];
-      if (watch.length) parts.push(`Watch-outs\n- ${watch.slice(0,5).join("\n- ")}`);
-      parts.push(parsed.final_reminder || "Please see a doctor for personalised advice.");
-      parsed.advice_text = parts.join("\n\n");
+    parsed.disclaimer =
+      "I can’t give a specific diagnosis or treatment for you. This is general education only. I can share possibilities and ideas to discuss with your doctor.";
+    if (parsed.advice_text) parsed.advice_text = sanitizeAdvice(parsed.advice_text);
+    // Guard against empty advice_text
+    if (!parsed.advice_text || parsed.advice_text.trim().length < 40) {
+      const watch = (parsed.urgent_triggers || []).slice(0,5);
+      const gaps  = (parsed.info_gaps || []).slice(0,3);
+      parsed.advice_text = sanitizeAdvice([
+        "What I think so far — based on what you shared, here’s a general picture.",
+        "What it could be (in general): a few possibilities your doctor may consider.",
+        "Ideas to discuss with your doctor: examination, whether tests are useful, and options for comfort while you wait.",
+        watch.length ? `Watch-outs: ${watch.join("; ")}` : "",
+        gaps.length ? `Info your doctor may ask/check: ${gaps.join("; ")}` : "",
+        "Next step: Please see a doctor for personalised advice."
+      ].filter(Boolean).join("\n\n"));
     }
   }
 
@@ -320,4 +360,3 @@ exports.handler = async function (event) {
 
   return { statusCode: 200, body: JSON.stringify({ ok:true, result: parsed }) };
 };
-
