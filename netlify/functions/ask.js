@@ -16,14 +16,13 @@ async function callOpenAIWithBackoff(headers, payload, tries = 3) {
   return last;
 }
 
-// Small sanitizer: keep only recent turns, trim long text
+// keep recent turns + trim long messages
 function normalizeHistory(raw) {
   if (!Array.isArray(raw)) return [];
   const clean = raw
     .filter(t => t && (t.role === "user" || t.role === "assistant") && typeof t.content === "string")
     .map(t => ({ role: t.role, content: t.content.slice(0, 800) }));
-  // keep last 12 messages (≈ 6 Q/A turns)
-  return clean.slice(-12);
+  return clean.slice(-12); // ~6 Q/A turns
 }
 
 // Netlify Function (CommonJS)
@@ -33,8 +32,7 @@ exports.handler = async function (event) {
   }
 
   const { question, history: rawHistory = [] } = JSON.parse(event.body || "{}");
-
-  if (!question || typeof question !== "string" || question.trim().length < 10) {
+  if (!question || question.trim().length < 10) {
     return { statusCode: 400, body: JSON.stringify({ error: "Please ask a longer question." }) };
   }
 
@@ -48,7 +46,7 @@ exports.handler = async function (event) {
     "Content-Type": "application/json"
   };
 
-  // 1) Moderate ONLY the new question
+  // 1) Moderate the NEW question only
   try {
     const modRes = await fetch("https://api.openai.com/v1/moderations", {
       method: "POST",
@@ -66,28 +64,40 @@ exports.handler = async function (event) {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Moderation request failed" }) };
   }
 
-  // 2) Build conversation messages
-  const sys = `You are a cautious medical educator (PH + AU audience).
-- Provide general education only; do NOT give personal medical advice.
-- Short, clear language. Bullet points when helpful.
+  // 2) Build conversation
+  const sys = `You are a cautious triage nurse and medical educator for a PH + AU audience.
+- Provide general education only; do NOT give personal medical advice or diagnoses.
+- Use a warm, conversational tone. Keep replies short (≤ 8 sentences).
+- If the user’s message is unclear or missing key info, ask ONE gentle follow-up question at the end.
+- Prefer bullet points for steps or red flags.
 - Always include a strong disclaimer and “see a doctor” guidance for red flags.
 - Do not request or use personal identifiers (names, DOB, addresses, photos).`;
 
   const history = normalizeHistory(rawHistory);
   const messages = [{ role: "system", content: sys }, ...history, { role: "user", content: question }];
 
-  // 3) Structured Output schema (strict)
+  // 3) Strict structured output (plus a conversational reply)
   const schema = {
     type: "object",
     additionalProperties: false,
     properties: {
       disclaimer: { type: "string" },
-      edu_answer: { type: "string" },
+      chat_reply: { type: "string" },    // conversational nurse-style reply
+      edu_answer: { type: "string" },    // longer educational content (optional to show)
       red_flags: { type: "array", items: { type: "string" } },
       when_to_seek_help: { type: "string" },
-      references: { type: "array", items: { type: "string" } }
+      references: { type: "array", items: { type: "string" } },
+      ask_back: { type: "string" }       // one follow-up question to keep the convo going
     },
-    required: ["disclaimer", "edu_answer", "red_flags", "when_to_seek_help", "references"]
+    required: [
+      "disclaimer",
+      "chat_reply",
+      "edu_answer",
+      "red_flags",
+      "when_to_seek_help",
+      "references",
+      "ask_back"
+    ]
   };
 
   const payload = {
@@ -115,7 +125,7 @@ exports.handler = async function (event) {
     };
   }
 
-  // 4) Pull the JSON result out of the Responses API
+  // 4) Extract the JSON from the Responses API
   let parsed;
   try {
     if (data.output_text) {
