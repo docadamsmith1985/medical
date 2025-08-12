@@ -21,15 +21,16 @@ function normalizeHistory(raw) {
   const clean = raw
     .filter(t => t && (t.role === "user" || t.role === "assistant") && typeof t.content === "string")
     .map(t => ({ role: t.role, content: t.content.slice(0, 800) }));
-  return clean.slice(-12); // ~6 Q/A turns
+  return clean.slice(-12);
 }
 
-// Small deterministic fallback plan (one question per turn)
+// deterministic fallback question (so we never send an empty bubble)
 function fallbackQuestion(step, userText="") {
-  const base = userText.toLowerCase();
+  const base = String(userText || "").toLowerCase();
   const isMed = /(tablet|pill|capsule|dose|vitamin|supplement|medicine|medication)/.test(base);
   const isRash = /\brash|itch|hives|spots?\b/.test(base);
   const isHeadache = /\bheadache|head ache|migraine\b/.test(base);
+  const isAbdo = /\bstomach|tummy|belly|abd(omen|ominal)|epigastr/i.test(base);
 
   const Q = [
     isMed
@@ -37,14 +38,18 @@ function fallbackQuestion(step, userText="") {
       : isRash
       ? "When did the rash start, and where on your body is it most noticeable?"
       : isHeadache
-      ? "How long has the headache been going on, and did it start suddenly or gradually?"
-      : "How long has this been going on, and did it start suddenly or gradually?",
+      ? "How long has the headache been going on—did it start suddenly or gradually?"
+      : isAbdo
+      ? "When did the stomach pain start—did it come on suddenly or build up over time?"
+      : "How long has this been going on—did it start suddenly or gradually?",
     isMed
       ? "How long have you been using it, and any side effects so far?"
       : isRash
       ? "Is it itchy, painful, or spreading, and do you have a fever?"
       : isHeadache
       ? "How severe is it on a 0–10 scale, and any nausea, light sensitivity, or vision changes?"
+      : isAbdo
+      ? "Where exactly is the pain (upper, lower, central, one side), and how severe is it on a 0–10 scale?"
       : "How severe is it on a 0–10 scale, and what makes it better or worse?",
     isMed
       ? "Do you take other meds or supplements, and do you have any medical conditions or allergies?"
@@ -52,13 +57,15 @@ function fallbackQuestion(step, userText="") {
       ? "Any new soaps, creams, detergents, foods, meds, or insect bites before it started?"
       : isHeadache
       ? "Where exactly is the pain (front, one side, behind an eye, whole head), and what does it feel like (throbbing, pressure, stabbing)?"
+      : isAbdo
+      ? "Is the pain sharp, crampy, or burning, and does it move or stay in one spot?"
       : "Where exactly is it located, and what does it feel like (sharp, dull, crampy, burning)?",
   ];
-  const pick = (Q[step] || Q[Q.length - 1]).split("?")[0];
-  return pick.endsWith("?") ? pick : `${pick}?`;
+  const pick = (Q[Math.min(step, Q.length - 1)] || Q[0]).trim();
+  return pick.endsWith("?") ? pick : pick + "?";
 }
 
-// Build system prompt (one question per turn; advice after 3 assistant turns; personalised advice)
+// system prompt (one question/turn; advice after 2 assistant turns; personalised advice)
 function buildSystemPrompt(assistantTurns) {
   return `
 System Prompt — Medical Information Chatbot
@@ -77,26 +84,23 @@ Conversation Flow
 
 A) Intake — Acquire Information First
 - Ask **exactly ONE question per turn** (no more than one).
-- Across the first few turns, aim to cover as relevant: age; sex (pregnancy/breastfeeding if relevant); onset & time course; location & character/quality; severity (0–10); triggers/relievers; associated symptoms; relevant history/meds/allergies; relevant exposures.
+- Across early turns, aim to cover as relevant: age; sex (pregnancy/breastfeeding if relevant); onset & time course; location & character/quality; severity (0–10); triggers/relievers; associated symptoms; relevant history/meds/allergies; relevant exposures.
 - Do NOT list causes/treatments/tests until enough info is gathered — except if urgent red flags are detected.
 - Formatting for intake: put your single question in "chat_reply". Leave "ask_back" empty.
 
 B) Advice — After You Have Enough Information
 - Start with: "I cannot give a specific diagnosis, treatment, or investigation for you personally. This is for general education only. I can, however, share what sometimes causes symptoms like yours, common treatments doctors may use, and tests they may consider."
-- Then provide, in this order (bullets welcome, concise, **make it personal to the user's details**):
-  1) Summary — weave in specifics the user gave (e.g., timing, severity, location, context).
-  2) Possible causes — 2–5 likely conditions with short explanations; where relevant, mention which parts match the user's details.
-  3) Typical treatments — general approaches doctors often use (no personal dosing/prescribing); optionally note which might be considered given the user's details.
-  4) Common investigations — what doctors may consider; tie to details if helpful (e.g., "because this started suddenly…").
-  5) Safe self-care options — conservative measures many people find helpful; tailor where appropriate (e.g., “since yours is 7/10…”).
-  6) Urgent-care triggers — specific warning signs; highlight ones most relevant to the user's story.
+- Then provide, in this order (concise, **personalise to user details**):
+  1) Summary (weave in their specifics: timing, location, severity, associated symptoms).
+  2) Possible causes (2–5) with short explanations tied to their details.
+  3) Typical treatments (general approaches; no personal dosing), note which might fit the story.
+  4) Common investigations (what doctors may consider) with brief “because …” links to their story.
+  5) Safe self-care options tailored where appropriate.
+  6) Urgent-care triggers (specific warning signs) — highlight those most relevant here.
   7) Final reminder — "Please see a doctor for personalised advice."
 
-Special Handling — Vitamins/Supplements/Medicines
-- Ask purpose, dose, duration, other meds/supplements, history, and symptoms; then summarise evidence, benefits, risks, who should avoid, and what to discuss with a doctor; use the same advice structure.
-
 Style
-- Plain English first; brief medical terms in brackets if helpful. Be concise. Avoid certainty (“could be”, “sometimes”).
+- Plain English first; brief medical terms in brackets only if helpful. Be concise. Avoid certainty (“could be”, “sometimes”).
 - If user seems distressed, be empathetic.
 
 Output Rules
@@ -106,20 +110,20 @@ Output Rules
 
 Control
 - assistant_turns_in_history = ${assistantTurns}.
-- If assistant_turns_in_history < 3 and no clear emergency → stage="intake" this turn.
-- If assistant_turns_in_history >= 3 OR emergency red flags → stage="advice" now (no questions this turn).
+- If assistant_turns_in_history < 2 and no emergency → stage="intake" this turn.
+- If assistant_turns_in_history >= 2 OR emergency red flags → stage="advice" now (no questions this turn).
 - Never output more than one question in a single turn.
 `;
 }
 
-// keep only one question and ensure it ends with '?'
+// ensure a single, non-empty question during intake
 function enforceOneQuestion(o, step, userText) {
   let q = (o.chat_reply || "").trim();
-  const idx = q.indexOf("?");
-  if (idx !== -1) q = q.slice(0, idx + 1);
+  const qm = q.indexOf("?");
+  if (qm !== -1) q = q.slice(0, qm + 1);
   if (!q || !q.endsWith("?")) q = fallbackQuestion(step, userText);
   o.chat_reply = q;
-  o.ask_back = ""; // never ask a second question in intake
+  o.ask_back = "";
   return o;
 }
 
@@ -134,8 +138,8 @@ exports.handler = async function (event) {
   catch { return { statusCode: 400, body: JSON.stringify({ ok:false, error:"Invalid JSON" }) }; }
 
   const { question, history: rawHistory = [] } = body;
-  if (!question || question.trim().length < 10) {
-    return { statusCode: 400, body: JSON.stringify({ error: "Please ask a longer question." }) };
+  if (!question || question.trim().length < 4) { // allow short answers like "7/10"
+    return { statusCode: 400, body: JSON.stringify({ error: "Please provide a bit more detail." }) };
   }
 
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -192,7 +196,7 @@ exports.handler = async function (event) {
       final_reminder: { type: "string" },
       references: { type: "array", items: { type: "string" } },
 
-      // back-compat
+      // back-compat (unused by UI now, but won’t hurt)
       edu_answer: { type: "string" },
       red_flags: { type: "array", items: { type: "string" } },
       when_to_seek_help: { type: "string" }
@@ -240,8 +244,8 @@ exports.handler = async function (event) {
   // First attempt
   let { ok, parsed, raw, status } = await callOnce(false);
 
-  // If we've already had 3 assistant turns and still didn't get advice, force it
-  if ((!ok || !parsed || parsed.stage !== "advice") && assistantTurns >= 3) { // change to >= 2 for earlier advice
+  // Force advice after **2 assistant turns** if it still didn't switch
+  if ((!ok || !parsed || parsed.stage !== "advice") && assistantTurns >= 2) {
     ({ ok, parsed, raw, status } = await callOnce(true));
   }
 
@@ -252,7 +256,7 @@ exports.handler = async function (event) {
     };
   }
 
-  // Intake: enforce single question; synthesize one if missing → prevents blank bubbles
+  // Intake: enforce single, non-empty question; synthesize one if missing
   if (parsed.stage === "intake") {
     parsed = enforceOneQuestion(parsed, Math.min(assistantTurns, 2), question);
   }
@@ -265,3 +269,4 @@ exports.handler = async function (event) {
 
   return { statusCode: 200, body: JSON.stringify({ ok:true, result: parsed }) };
 };
+
