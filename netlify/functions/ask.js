@@ -22,11 +22,13 @@ exports.handler = async function (event) {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
+  // 1) Validate input
   const { question } = JSON.parse(event.body || "{}");
   if (!question || question.trim().length < 10) {
     return { statusCode: 400, body: JSON.stringify({ error: "Please ask a longer question." }) };
   }
 
+  // 2) Read API key
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   if (!OPENAI_API_KEY) {
     return { statusCode: 500, body: JSON.stringify({ error: "Missing OPENAI_API_KEY" }) };
@@ -37,21 +39,25 @@ exports.handler = async function (event) {
     "Content-Type": "application/json"
   };
 
-  // 1) Moderate the incoming question
-  const modRes = await fetch("https://api.openai.com/v1/moderations", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ model: "omni-moderation-latest", input: question })
-  });
-  const modJson = await modRes.json();
-  if (!modRes.ok) {
-    return { statusCode: modRes.status, body: JSON.stringify({ ok: false, error: modJson?.error?.message || "Moderation failed" }) };
-  }
-  if (modJson.results?.[0]?.flagged) {
-    return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Question blocked by moderation." }) };
+  // 3) Moderation (optional but recommended)
+  try {
+    const modRes = await fetch("https://api.openai.com/v1/moderations", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: "omni-moderation-latest", input: question })
+    });
+    const modJson = await modRes.json();
+    if (!modRes.ok) {
+      return { statusCode: modRes.status, body: JSON.stringify({ ok: false, error: modJson?.error?.message || "Moderation failed" }) };
+    }
+    if (modJson.results?.[0]?.flagged) {
+      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Question blocked by moderation." }) };
+    }
+  } catch {
+    return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Moderation request failed" }) };
   }
 
-  // 2) Ask the model with a strict JSON schema (Structured Outputs)
+  // 4) Call the model with structured output (Responses API now uses text.format)
   const schema = {
     type: "object",
     properties: {
@@ -76,7 +82,13 @@ exports.handler = async function (event) {
       { role: "system", content: sys },
       { role: "user", content: `Question: ${question}\nReturn JSON matching the schema keys.` }
     ],
-    response_format: { type: "json_schema", json_schema: { name: "MedQA", strict: true, schema } }
+    // 👇 new format for structured outputs on the Responses API
+    text: {
+      format: {
+        type: "json_schema",
+        json_schema: { name: "MedQA", strict: true, schema }
+      }
+    }
   };
 
   const res = await callOpenAIWithBackoff(headers, payload);
@@ -89,17 +101,18 @@ exports.handler = async function (event) {
     };
   }
 
-  // Extract the structured JSON from Responses API
+  // 5) Extract the JSON the Responses API returned
   let parsed;
   try {
     if (data.output_text) {
       parsed = JSON.parse(data.output_text);
     } else if (Array.isArray(data.output)) {
-      const first = data.output[0];
-      const textItem = first?.content?.find?.(c => c.type === "output_text" || c.type === "text");
-      parsed = JSON.parse(textItem?.text ?? "{}");
+      const textItem = data.output[0]?.content?.find?.(
+        c => c.type === "output_text" || c.type === "text"
+      );
+      if (textItem?.text) parsed = JSON.parse(textItem.text);
     }
-  } catch { /* ignore */ }
+  } catch {}
 
   return {
     statusCode: 200,
