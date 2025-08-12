@@ -3,31 +3,38 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Medical Q&A — Education Only</title>
+  <title>Medical Q&A — general education only</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;line-height:1.45}
-    h1{margin-bottom:6px}
-    .disclaimer{background:#fff3cd;border:1px solid #ffe69c;padding:10px 12px;border-radius:10px;margin:8px 0 16px}
-    .chat{border:1px solid #eee;border-radius:12px;padding:12px;margin:12px 0;max-height:520px;overflow:auto}
-    .msg{margin:8px 0;padding:10px 12px;border-radius:12px;max-width:85%;white-space:pre-wrap}
-    .me{background:#eef6ff;margin-left:auto}
-    .bot{background:#f7f7f7}
-    textarea{width:100%;min-height:90px;padding:10px;border-radius:10px;border:1px solid #ddd}
+    :root{
+      --bg:#ffffff; --fg:#111; --muted:#666; --panel:#f7f7f7;
+      --accent:#fff3cd; --accent-border:#ffe69c;
+      --me:#eef6ff; --bot:#f5f5f5; --border:#e6e6e6;
+    }
+    html,body{background:var(--bg); color:var(--fg)}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;
+         max-width:760px;margin:40px auto;padding:0 16px;line-height:1.45}
+    h1{margin:0 0 10px 0}
+    .muted{color:var(--muted)}
+    .disclaimer{background:var(--accent);border:1px solid var(--accent-border);
+                padding:12px 14px;border-radius:12px;margin:12px 0 16px}
+    .chat{border:1px solid var(--border);border-radius:12px;padding:12px;margin:12px 0;
+          max-height:520px;overflow:auto;background:#fff}
+    .msg{margin:8px 0;padding:10px 12px;border-radius:12px;max-width:85%;
+         white-space:pre-wrap}
+    .me{background:var(--me);margin-left:auto}
+    .bot{background:var(--bot)}
+    textarea{width:100%;min-height:90px;padding:10px;border-radius:10px;border:1px solid var(--border);
+             font:inherit}
     .row{display:flex;gap:8px;align-items:center;margin-top:8px}
-    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;cursor:pointer}
-    .card{border:1px solid #eee;border-radius:12px;padding:12px;margin-top:14px}
-    .muted{opacity:.8;font-size:.92em}
-    .hidden{display:none}
-    .chip{font-size:.85em;border:1px solid #ddd;border-radius:999px;padding:5px 9px}
-    details summary{cursor:pointer}
-
-    /* typing indicator */
-    .typing{display:flex;align-items:center;gap:6px;margin:6px 0}
+    button{padding:10px 14px;border-radius:10px;border:1px solid var(--border);cursor:pointer;background:#fff}
+    button[disabled]{opacity:.6;cursor:not-allowed}
+    .chip{font-size:.85em;border:1px solid var(--border);border-radius:999px;padding:6px 10px;background:#fff}
+    .typing{display:flex;align-items:center;gap:6px;margin:6px 0 0 2px}
     .typing.hidden{display:none}
     .dot{width:6px;height:6px;border-radius:50%;background:#bbb;animation:blink 1.2s infinite ease-in-out}
     .dot:nth-child(2){animation-delay:.2s}
     .dot:nth-child(3){animation-delay:.4s}
-    @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
+    @keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
   </style>
 </head>
 <body>
@@ -35,40 +42,42 @@
 
   <div class="disclaimer">
     <strong>Important:</strong> This bot was developed and instructed by <strong>Doc Adam</strong> for
-    <em>general education only</em>. It <strong>can make mistakes</strong>. It’s not medical advice,
-    diagnosis, or a treatment plan. Huwag maglagay ng personal data (pangalan, address, birthday, photos).
+    <em>general education only</em>. It <strong>can make mistakes</strong>. It isn’t medical advice,
+    a diagnosis, or a treatment plan. Huwag maglagay ng personal data (pangalan, address, birthday, photos).
     If symptoms are new, severe, or worsening, please see a doctor or go to ED.
   </div>
 
   <!-- Chat log -->
-  <div id="chat" class="chat"></div>
+  <div id="chat" class="chat" aria-live="polite" aria-label="Conversation"></div>
 
   <!-- typing indicator -->
-  <div id="typing" class="typing hidden">
+  <div id="typing" class="typing hidden" aria-hidden="true">
     <span class="muted">Assistant is typing</span>
     <span class="dot"></span><span class="dot"></span><span class="dot"></span>
   </div>
 
-  <form id="qform">
+  <form id="qform" autocomplete="off">
     <label for="q" class="muted">Type your question or follow-up:</label>
-    <textarea id="q" placeholder="e.g., Headache for 2 days, worse at night — what should I check?" required minlength="5" maxlength="800"></textarea>
+    <textarea id="q" placeholder="e.g., Headache for 2 days, worse at night — what should I check?"></textarea>
     <div class="row">
       <button type="submit" id="askBtn">Send</button>
-      <button type="button" id="newBtn" class="chip">New topic</button>
-      <span id="turns" class="muted"></span>
+      <button type="button" id="newBtn" class="chip" title="Clear conversation">New topic</button>
+      <span id="turns" class="muted" style="margin-left:auto"></span>
+    </div>
+    <div class="muted" style="font-size:.85em;margin-top:6px">
+      Tip: <kbd>Enter</kbd> to send, <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line.
     </div>
   </form>
 
-  <!-- Old details panel kept but hidden; we now write advice directly into chat -->
-  <div id="result" class="card hidden"></div>
-
   <script>
+    // UI elements
     const chatEl   = document.getElementById("chat");
     const form     = document.getElementById("qform");
     const btn      = document.getElementById("askBtn");
     const newBtn   = document.getElementById("newBtn");
     const turnsEl  = document.getElementById("turns");
     const typingEl = document.getElementById("typing");
+    const inputEl  = document.getElementById("q");
 
     // ---- conversation history (saved locally for follow-ups) ----
     let history = [];
@@ -79,7 +88,8 @@
     updateTurns();
 
     function updateTurns(){
-      turnsEl.textContent = history.length ? `Context turns: ${history.length}` : "";
+      const n = history.length;
+      turnsEl.textContent = n ? `Context turns: ${n}` : "";
     }
     function saveHistory(){
       try { localStorage.setItem("medqa_history", JSON.stringify(history.slice(-12))); } catch {}
@@ -94,42 +104,53 @@
       chatEl.scrollTop = chatEl.scrollHeight;
     }
 
-    function bullet(label, arr){
-      if (!Array.isArray(arr) || !arr.length) return "";
-      return `${label}\n- ${arr.map(x => String(x)).join("\n- ")}`;
-    }
-
+    // Build a readable advice bubble from the structured response
     function formatAdvice(o){
+      if (o.advice_text && o.advice_text.trim()) {
+        const disc = o.disclaimer || "General education only — not medical advice.";
+        return `${disc}\n\n${o.advice_text.trim()}`;
+      }
+      // Fallback builder (in case advice_text missing)
+      const bullet = (label, arr) => (Array.isArray(arr) && arr.length)
+        ? `${label}\n- ${arr.map(x => String(x)).join("\n- ")}` : "";
       const urgent = o.urgent_triggers || o.red_flags || [];
       const finalLine = o.final_reminder || o.when_to_seek_help || "Please see a doctor for personalised advice.";
-      // Build one friendly, personalised message
       const parts = [
         o.disclaimer || "General education only — not medical advice.",
-        o.summary ? `Summary: ${o.summary}` : "",
-        bullet("Possible causes", o.possible_causes),
-        bullet("Typical treatments (doctor-directed)", o.typical_treatments),
-        bullet("Common investigations", o.common_investigations),
-        bullet("Safe self-care options", o.self_care),
-        bullet("Urgent-care triggers", urgent),
-        `Final reminder: ${finalLine}`
+        o.summary ? `What I think so far — ${o.summary}` : "",
+        bullet("What it could be", (o.possible_causes||[]).slice(0,3)),
+        bullet("What you can do now", (o.self_care||[]).slice(0,3)),
+        bullet("What a doctor might do", (o.common_investigations||[]).slice(0,3)),
+        bullet("Watch-outs", urgent.slice(0,5)),
+        finalLine
       ].filter(Boolean);
       return parts.join("\n\n");
     }
 
+    // New topic
     newBtn.addEventListener("click", () => {
       history = [];
       saveHistory();
       chatEl.innerHTML = "";
       typingEl.classList.add("hidden");
-      document.getElementById("q").focus();
+      inputEl.value = "";
+      inputEl.focus();
+    });
+
+    // Enter to send, Shift+Enter for newline
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit(btn);
+      }
     });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const question = document.getElementById("q").value.trim();
+      const question = inputEl.value.trim();
       if (!question) return;
       addMsg("user", question);
-      document.getElementById("q").value = "";
+      inputEl.value = "";
       btn.disabled = true; btn.textContent = "Thinking…";
       typingEl.classList.remove("hidden");
 
@@ -143,15 +164,15 @@
         if (!j.ok) throw j;
 
         const o = j.result || {};
-        const stage = o.stage || (Array.isArray(o.possible_causes) ? "advice" : "intake");
+        const stage = o.stage || (o.advice_text ? "advice" : "intake");
 
         if (stage === "advice") {
-          // Put the ENTIRE advice into the chat bubble (personalised via model's summary)
           const adviceText = formatAdvice(o);
           addMsg("assistant", adviceText);
         } else {
-          // Intake: one question only
-          const chatReply = o.chat_reply || "";
+          // Intake: ask ONE concise question; ensure non-empty fallback
+          let chatReply = (o.chat_reply || "").trim();
+          if (!chatReply) chatReply = "Quick one: when did this start — suddenly or gradually?";
           addMsg("assistant", chatReply);
         }
 
@@ -159,17 +180,18 @@
         history.push({ role: "user", content: question });
         const assistantContent = (stage === "advice"
           ? (o.summary || o.chat_reply || "Advice provided.")
-          : (o.chat_reply || "")).slice(0, 800);
+          : (o.chat_reply || "A follow-up question")).slice(0, 800);
         history.push({ role: "assistant", content: assistantContent });
         history = history.slice(-12);
         saveHistory();
 
       } catch (err) {
-        const msg = err?.error?.message || err?.error || err?.message || "Something went wrong. Try again.";
+        const msg = err?.error?.message || err?.error || err?.message || "Something went wrong. Please try again.";
         alert(msg);
       } finally {
         btn.disabled = false; btn.textContent = "Send";
         typingEl.classList.add("hidden");
+        inputEl.focus();
       }
     });
   </script>
