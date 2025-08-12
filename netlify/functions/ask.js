@@ -10,9 +10,7 @@ async function callOpenAIWithBackoff(headers, payload, tries = 3) {
       body: JSON.stringify(payload),
     });
     if (res.status !== 429) return res;
-    last = res;
-    await new Promise(r => setTimeout(r, wait));
-    wait *= 2;
+    last = res; await new Promise(r => setTimeout(r, wait)); wait *= 2;
   }
   return last;
 }
@@ -26,78 +24,102 @@ function normalizeHistory(raw) {
   return clean.slice(-12); // ~6 Q/A turns
 }
 
-// --- system prompt builder (one question per turn, advice after 3 turns) ---
+// Small deterministic fallback plan (one question per turn)
+function fallbackQuestion(step, userText="") {
+  const base = userText.toLowerCase();
+  const isMed = /(tablet|pill|capsule|dose|vitamin|supplement|medicine|medication)/.test(base);
+  const isRash = /\brash|itch|hives|spots?\b/.test(base);
+  const isHeadache = /\bheadache|head ache|migraine\b/.test(base);
+
+  const Q = [
+    isMed
+      ? "What’s the exact product and dose, and why are you taking it?"
+      : isRash
+      ? "When did the rash start, and where on your body is it most noticeable?"
+      : isHeadache
+      ? "How long has the headache been going on, and did it start suddenly or gradually?"
+      : "How long has this been going on, and did it start suddenly or gradually?",
+    isMed
+      ? "How long have you been using it, and any side effects so far?"
+      : isRash
+      ? "Is it itchy, painful, or spreading, and do you have a fever?"
+      : isHeadache
+      ? "How severe is it on a 0–10 scale, and any nausea, light sensitivity, or vision changes?"
+      : "How severe is it on a 0–10 scale, and what makes it better or worse?",
+    isMed
+      ? "Do you take other meds or supplements, and do you have any medical conditions or allergies?"
+      : isRash
+      ? "Any new soaps, creams, detergents, foods, meds, or insect bites before it started?"
+      : isHeadache
+      ? "Where exactly is the pain (front, one side, behind an eye, whole head), and what does it feel like (throbbing, pressure, stabbing)?"
+      : "Where exactly is it located, and what does it feel like (sharp, dull, crampy, burning)?",
+  ];
+  const pick = (Q[step] || Q[Q.length - 1]).split("?")[0];
+  return pick.endsWith("?") ? pick : `${pick}?`;
+}
+
+// Build system prompt (one question per turn; advice after 3 assistant turns; personalised advice)
 function buildSystemPrompt(assistantTurns) {
   return `
 System Prompt — Medical Information Chatbot
 
 You are a conversational medical information assistant.
 1) First collect key information, then 2) give structured, practical, safe, non-personalised guidance.
-Do not jump straight to “see a doctor” or list treatments until you have asked relevant questions —
-unless there are clear emergency red flags.
+Do not jump straight to “see a doctor” or list treatments until you have asked relevant questions — unless there are clear emergency red flags.
 
 Core Rules
 - Tone: calm, respectful, concise, conversational.
 - Scope: education only. You can make mistakes. This is not medical advice, diagnosis, or prescription.
 - Privacy: never ask for full names, exact addresses, or personal identifiers.
-- Safety: if you detect red flags (e.g., severe/worsening chest pain, breathing trouble, stroke signs, sepsis signs,
-  suicidal thoughts, pregnancy emergencies, anaphylaxis, major trauma), immediately give a clear urgent-care warning and say why.
+- Safety: if you detect red flags (e.g., severe/worsening chest pain, breathing trouble, stroke signs, sepsis signs, suicidal thoughts, pregnancy emergencies, anaphylaxis, major trauma), immediately give a clear urgent-care warning and say why.
 
 Conversation Flow
 
 A) Intake — Acquire Information First
-- Ask IN MICRO BATCHES: **exactly ONE question per turn** (no more than one).
-- Across the first few turns, aim to cover as relevant: age; sex (pregnancy/breastfeeding if relevant); onset & time course;
-  location & character/quality; severity (0–10); triggers/relievers; associated symptoms; relevant history/meds/allergies;
-  recent travel/exposures if relevant.
-- Do **not** list causes, treatments, or investigations until enough info is gathered — except if urgent red flags are detected.
-- **Formatting rule for intake:** put your single question in "chat_reply". Leave "ask_back" empty.
+- Ask **exactly ONE question per turn** (no more than one).
+- Across the first few turns, aim to cover as relevant: age; sex (pregnancy/breastfeeding if relevant); onset & time course; location & character/quality; severity (0–10); triggers/relievers; associated symptoms; relevant history/meds/allergies; relevant exposures.
+- Do NOT list causes/treatments/tests until enough info is gathered — except if urgent red flags are detected.
+- Formatting for intake: put your single question in "chat_reply". Leave "ask_back" empty.
 
 B) Advice — After You Have Enough Information
-- Start with a general safety statement:
-  "I cannot give a specific diagnosis, treatment, or investigation for you personally. This is for general education only.
-   I can, however, share what sometimes causes symptoms like yours, common treatments doctors may use, and tests they may consider."
-- Then present in this order (bullets welcome, concise):
-  1. Summary — 1–2 sentences.
-  2. Possible causes — 2–5 likely conditions (plain language, short explanations).
-  3. Typical treatments — general approaches doctors often use (no personal dosing/prescribing).
-  4. Common investigations — tests doctors may consider (do not tell the user to get them done).
-  5. Safe self-care options — conservative measures people sometimes find helpful.
-  6. Urgent-care triggers — specific warning signs for immediate medical attention.
-  7. Final reminder — "Please see a doctor for personalised advice."
+- Start with: "I cannot give a specific diagnosis, treatment, or investigation for you personally. This is for general education only. I can, however, share what sometimes causes symptoms like yours, common treatments doctors may use, and tests they may consider."
+- Then provide, in this order (bullets welcome, concise, **make it personal to the user's details**):
+  1) Summary — weave in specifics the user gave (e.g., timing, severity, location, context).
+  2) Possible causes — 2–5 likely conditions with short explanations; where relevant, mention which parts match the user's details.
+  3) Typical treatments — general approaches doctors often use (no personal dosing/prescribing); optionally note which might be considered given the user's details.
+  4) Common investigations — what doctors may consider; tie to details if helpful (e.g., "because this started suddenly…").
+  5) Safe self-care options — conservative measures many people find helpful; tailor where appropriate (e.g., “since yours is 7/10…”).
+  6) Urgent-care triggers — specific warning signs; highlight ones most relevant to the user's story.
+  7) Final reminder — "Please see a doctor for personalised advice."
 
 Special Handling — Vitamins/Supplements/Medicines
-- Ask purpose, dose, duration, other meds/supplements, history, and symptoms; then summarise evidence, benefits, risks,
-  who should avoid, and what to discuss with a doctor; use the same advice structure.
+- Ask purpose, dose, duration, other meds/supplements, history, and symptoms; then summarise evidence, benefits, risks, who should avoid, and what to discuss with a doctor; use the same advice structure.
 
-Style Details
-- Plain English first; brief medical terms in brackets only if helpful.
-- Be concise; avoid certainty (“could be”, “sometimes”, “worth discussing with your doctor”).
-- If user seems distressed, acknowledge and be empathetic.
+Style
+- Plain English first; brief medical terms in brackets if helpful. Be concise. Avoid certainty (“could be”, “sometimes”).
+- If user seems distressed, be empathetic.
 
 Output Rules
 - Set "stage" to "intake" or "advice".
-- Intake turn: **one question only** → put it in "chat_reply"; leave "ask_back" "".
-- Advice turn: fill the structured fields; keep "chat_reply" to 2–3 short sentences.
+- Intake: ONE question only → "chat_reply"; leave "ask_back" "".
+- Advice: fill the structured fields; keep "chat_reply" to 2–3 short sentences.
 
 Control
 - assistant_turns_in_history = ${assistantTurns}.
-- If assistant_turns_in_history < 3 and no clear emergency: you are in stage="intake" and must ask exactly one question.
-- If assistant_turns_in_history >= 3 OR you detect clear emergency red flags: respond with stage="advice" now (no further questions this turn).
+- If assistant_turns_in_history < 3 and no clear emergency → stage="intake" this turn.
+- If assistant_turns_in_history >= 3 OR emergency red flags → stage="advice" now (no questions this turn).
+- Never output more than one question in a single turn.
 `;
 }
 
-// ensure exactly one question shown to the user
-function enforceOneQuestion(o) {
+// keep only one question and ensure it ends with '?'
+function enforceOneQuestion(o, step, userText) {
   let q = (o.chat_reply || "").trim();
-
-  // If model sneaks multiple questions, keep only up to first '?'
   const idx = q.indexOf("?");
   if (idx !== -1) q = q.slice(0, idx + 1);
-
-  // Remove any leftover question(s) from ask_back
+  if (!q || !q.endsWith("?")) q = fallbackQuestion(step, userText);
   o.chat_reply = q;
-  o.ask_back = ""; // intake uses only chat_reply
+  o.ask_back = ""; // never ask a second question in intake
   return o;
 }
 
@@ -180,15 +202,14 @@ exports.handler = async function (event) {
 
   async function callOnce(forceAdvice = false) {
     const messages = forceAdvice
-      ? [{ role: "system", content: 'CONTROL: If no clear emergency, respond with stage="advice" now. Do not ask more questions this turn.' }, ...baseMessages]
+      ? [{ role: "system", content: 'CONTROL: Respond with stage="advice" now. Do not ask questions this turn unless there are immediate emergency red flags.' }, ...baseMessages]
       : baseMessages;
 
     const payload = {
       model: "gpt-4o-mini",
       input: messages,
       temperature: 0.2,
-      max_output_tokens: 750,
-      // Your account expects text.format for structured output
+      max_output_tokens: 800,
       text: {
         format: {
           type: "json_schema",
@@ -219,8 +240,8 @@ exports.handler = async function (event) {
   // First attempt
   let { ok, parsed, raw, status } = await callOnce(false);
 
-  // Force advice if we've already asked 3 intake turns and model still hasn't switched
-  if ((!ok || !parsed || parsed.stage !== "advice") && assistantTurns >= 3) {
+  // If we've already had 3 assistant turns and still didn't get advice, force it
+  if ((!ok || !parsed || parsed.stage !== "advice") && assistantTurns >= 3) { // change to >= 2 for earlier advice
     ({ ok, parsed, raw, status } = await callOnce(true));
   }
 
@@ -231,10 +252,12 @@ exports.handler = async function (event) {
     };
   }
 
-  // Enforce exactly one question during intake
-  if (parsed.stage === "intake") parsed = enforceOneQuestion(parsed);
+  // Intake: enforce single question; synthesize one if missing → prevents blank bubbles
+  if (parsed.stage === "intake") {
+    parsed = enforceOneQuestion(parsed, Math.min(assistantTurns, 2), question);
+  }
 
-  // Fill defaults for advice
+  // Advice: fill defaults
   if (parsed.stage === "advice") {
     parsed.disclaimer = parsed.disclaimer || "General education only — not medical advice.";
     parsed.final_reminder = parsed.final_reminder || (parsed.when_to_seek_help || "Please see a doctor for personalised advice.");
