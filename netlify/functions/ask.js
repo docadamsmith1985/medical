@@ -16,8 +16,8 @@ async function callOpenAIWithBackoff(headers, payload, tries = 3) {
   return last;
 }
 
-// Netlify Function: server-side proxy (keeps your OpenAI key secret)
-export async function handler(event) {
+// Netlify Function (CommonJS export)
+exports.handler = async function (event) {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
@@ -89,7 +89,7 @@ export async function handler(event) {
     };
   }
 
-  // Try to extract the structured JSON from Responses API
+  // Extract the structured JSON from Responses API
   let parsed;
   try {
     if (data.output_text) {
@@ -97,5 +97,12 @@ export async function handler(event) {
     } else if (Array.isArray(data.output)) {
       const first = data.output[0];
       const textItem = first?.content?.find?.(c => c.type === "output_text" || c.type === "text");
-      parsed = JS
+      parsed = JSON.parse(textItem?.text ?? "{}");
+    }
+  } catch { /* ignore */ }
 
+  return {
+    statusCode: 200,
+    body: JSON.stringify(parsed ? { ok: true, result: parsed } : { ok: false, raw: data })
+  };
+};
