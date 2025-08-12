@@ -20,14 +20,34 @@
     .hidden{display:none}
     .chip{font-size:.85em;border:1px solid #ddd;border-radius:999px;padding:5px 9px}
     details summary{cursor:pointer}
+
+    /* typing indicator */
+    .typing{display:flex;align-items:center;gap:6px;margin:6px 0}
+    .typing.hidden{display:none}
+    .dot{width:6px;height:6px;border-radius:50%;background:#bbb;animation:blink 1.2s infinite ease-in-out}
+    .dot:nth-child(2){animation-delay:.2s}
+    .dot:nth-child(3){animation-delay:.4s}
+    @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
   </style>
 </head>
 <body>
   <h1>Medical Q&amp;A <span class="muted">— general education only</span></h1>
-  <div class="disclaimer"><strong>Important:</strong> This is <em>not</em> medical advice. Huwag maglagay ng personal data (pangalan, address, birthday, photos). If you have new, severe, or worsening symptoms, see a doctor or go to ED.</div>
+
+  <div class="disclaimer">
+    <strong>Important:</strong> This bot was developed and instructed by <strong>Doc Adam</strong> for
+    <em>general education only</em>. It <strong>can make mistakes</strong>. It’s not medical advice,
+    diagnosis, or a treatment plan. Huwag maglagay ng personal data (pangalan, address, birthday, photos).
+    If symptoms are new, severe, or worsening, please see a doctor or go to ED.
+  </div>
 
   <!-- simple chat log -->
   <div id="chat" class="chat"></div>
+
+  <!-- typing indicator -->
+  <div id="typing" class="typing hidden">
+    <span class="muted">Assistant is typing</span>
+    <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+  </div>
 
   <form id="qform">
     <label for="q" class="muted">Type your question or follow-up:</label>
@@ -60,6 +80,7 @@
     const btn    = document.getElementById("askBtn");
     const newBtn = document.getElementById("newBtn");
     const turnsEl= document.getElementById("turns");
+    const typingEl = document.getElementById("typing");
     const ui = {
       result: document.getElementById("result"),
       disc: document.getElementById("disc"),
@@ -99,6 +120,7 @@
       saveHistory();
       chatEl.innerHTML = "";
       ui.result.classList.add("hidden");
+      typingEl.classList.add("hidden");
       document.getElementById("q").focus();
     });
 
@@ -109,6 +131,7 @@
       addMsg("user", question);
       document.getElementById("q").value = "";
       btn.disabled = true; btn.textContent = "Thinking…";
+      typingEl.classList.remove("hidden");
 
       try {
         const r = await fetch("/.netlify/functions/ask", {
@@ -150,10 +173,10 @@
         alert(msg);
       } finally {
         btn.disabled = false; btn.textContent = "Send";
+        typingEl.classList.add("hidden");
       }
     });
   </script>
 </body>
 </html>
-
 
