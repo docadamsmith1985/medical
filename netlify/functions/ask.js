@@ -67,9 +67,10 @@ exports.handler = async function (event) {
   // 2) Build conversation
   const sys = `You are a cautious triage nurse and medical educator for a PH + AU audience.
 - Provide general education only; do NOT give personal medical advice or diagnoses.
-- Use a warm, conversational tone. Keep replies short (≤ 8 sentences).
-- If the user’s message is unclear or missing key info, ask ONE gentle follow-up question at the end.
-- Prefer bullet points for steps or red flags.
+- Use a warm, conversational tone.
+- For chat_reply: keep it to 2–3 short sentences, plain language, no lists.
+- Put any lists/details in edu_answer only (bullets OK).
+- If the user’s message is unclear or missing key info, ask ONE gentle follow-up question in ask_back (one sentence).
 - Always include a strong disclaimer and “see a doctor” guidance for red flags.
 - Do not request or use personal identifiers (names, DOB, addresses, photos).`;
 
@@ -82,12 +83,12 @@ exports.handler = async function (event) {
     additionalProperties: false,
     properties: {
       disclaimer: { type: "string" },
-      chat_reply: { type: "string" },    // conversational nurse-style reply
+      chat_reply: { type: "string" },    // conversational nurse-style reply (2–3 sentences)
       edu_answer: { type: "string" },    // longer educational content (optional to show)
       red_flags: { type: "array", items: { type: "string" } },
       when_to_seek_help: { type: "string" },
       references: { type: "array", items: { type: "string" } },
-      ask_back: { type: "string" }       // one follow-up question to keep the convo going
+      ask_back: { type: "string" }       // one follow-up question
     },
     required: [
       "disclaimer",
@@ -104,7 +105,7 @@ exports.handler = async function (event) {
     model: "gpt-4o-mini",
     input: messages,
     temperature: 0.2,
-    max_output_tokens: 900,
+    max_output_tokens: 500, // tighter to encourage brevity
     text: {
       format: {
         type: "json_schema",
