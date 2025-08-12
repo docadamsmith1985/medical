@@ -6,7 +6,7 @@
   <title>Medical Q&A — general education only</title>
   <style>
     :root{
-      --bg:#ffffff; --fg:#111; --muted:#666; --panel:#f7f7f7;
+      --bg:#fff; --fg:#111; --muted:#666; --panel:#f7f7f7;
       --accent:#fff3cd; --accent-border:#ffe69c;
       --me:#eef6ff; --bot:#f5f5f5; --border:#e6e6e6;
     }
@@ -42,9 +42,10 @@
 
   <div class="disclaimer">
     <strong>Important:</strong> This bot was developed and instructed by <strong>Doc Adam</strong> for
-    <em>general education only</em>. It <strong>can make mistakes</strong>. It isn’t medical advice,
-    a diagnosis, or a treatment plan. Huwag maglagay ng personal data (pangalan, address, birthday, photos).
-    If symptoms are new, severe, or worsening, please see a doctor or go to ED.
+    <em>general education only</em>. It <strong>can make mistakes</strong> and is <strong>not a medical service</strong>.
+    It doesn’t give diagnoses or treatment plans and can’t consider your full medical history.
+    <strong>Don’t start/stop medicines</strong> based on this. If symptoms are <strong>new, severe, or worsening</strong>,
+    please see a doctor or go to ED.
   </div>
 
   <!-- Chat log -->
@@ -106,23 +107,32 @@
 
     // Build a readable advice bubble from the structured response
     function formatAdvice(o){
+      const infoGaps = Array.isArray(o.info_gaps) ? o.info_gaps.slice(0,3) : [];
+      const disc = o.disclaimer || "I can’t give a specific diagnosis or treatment for you. This is general education only. I can share possibilities and ideas to discuss with your doctor.";
+      const watch = Array.isArray(o.urgent_triggers) ? o.urgent_triggers.slice(0,5) : [];
+
+      // Prefer model-composed teach-back
       if (o.advice_text && o.advice_text.trim()) {
-        const disc = o.disclaimer || "General education only — not medical advice.";
-        return `${disc}\n\n${o.advice_text.trim()}`;
+        const extra = [];
+        if (infoGaps.length) extra.push(`\n\nInfo your doctor may ask/check:\n- ${infoGaps.join("\n- ")}`);
+        if (watch.length && !o.advice_text.toLowerCase().includes("watch-outs")) {
+          extra.push(`\n\nWatch-outs:\n- ${watch.join("\n- ")}`);
+        }
+        return `${disc}\n\n${o.advice_text.trim()}${extra.join("")}`;
       }
-      // Fallback builder (in case advice_text missing)
+
+      // Fallback builder
       const bullet = (label, arr) => (Array.isArray(arr) && arr.length)
         ? `${label}\n- ${arr.map(x => String(x)).join("\n- ")}` : "";
-      const urgent = o.urgent_triggers || o.red_flags || [];
-      const finalLine = o.final_reminder || o.when_to_seek_help || "Please see a doctor for personalised advice.";
       const parts = [
-        o.disclaimer || "General education only — not medical advice.",
+        disc,
         o.summary ? `What I think so far — ${o.summary}` : "",
-        bullet("What it could be", (o.possible_causes||[]).slice(0,3)),
-        bullet("What you can do now", (o.self_care||[]).slice(0,3)),
-        bullet("What a doctor might do", (o.common_investigations||[]).slice(0,3)),
-        bullet("Watch-outs", urgent.slice(0,5)),
-        finalLine
+        bullet("What it could be (in general)", (o.possible_causes||[]).slice(0,3)),
+        bullet("Ideas to discuss with your doctor", (o.common_investigations||[]).slice(0,3)),
+        bullet("Comfort-only tips (not a treatment plan)", (o.self_care||[]).slice(0,3)),
+        bullet("Watch-outs", watch),
+        bullet("Info your doctor may ask/check", infoGaps),
+        o.final_reminder || "Please see a doctor for personalised advice."
       ].filter(Boolean);
       return parts.join("\n\n");
     }
@@ -170,7 +180,7 @@
           const adviceText = formatAdvice(o);
           addMsg("assistant", adviceText);
         } else {
-          // Intake: ask ONE concise question; ensure non-empty fallback
+          // Intake: one concise question; ensure non-empty fallback
           let chatReply = (o.chat_reply || "").trim();
           if (!chatReply) chatReply = "Quick one: when did this start — suddenly or gradually?";
           addMsg("assistant", chatReply);
@@ -197,6 +207,5 @@
   </script>
 </body>
 </html>
-
 
 
