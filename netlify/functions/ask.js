@@ -22,13 +22,8 @@ async function callOpenAIWithBackoff(headers, payload, tries = 3) {
 function normalizeHistory(raw) {
   if (!Array.isArray(raw)) return [];
   const clean = raw
-    .filter(
-      (t) =>
-        t &&
-        (t.role === "user" || t.role === "assistant") &&
-        typeof t.content === "string"
-    )
-    .map((t) => ({ role: t.role, content: t.content.slice(0, 800) }));
+    .filter(t => t && (t.role === "user" || t.role === "assistant") && typeof t.content === "string")
+    .map(t => ({ role: t.role, content: t.content.slice(0, 800) }));
   return clean.slice(-12); // ~6 Q/A turns
 }
 
@@ -42,26 +37,17 @@ exports.handler = async function (event) {
   try {
     body = JSON.parse(event.body || "{}");
   } catch {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ ok: false, error: "Invalid JSON" }),
-    };
+    return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Invalid JSON" }) };
   }
 
   const { question, history: rawHistory = [] } = body;
   if (!question || question.trim().length < 10) {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: "Please ask a longer question." }),
-    };
+    return { statusCode: 400, body: JSON.stringify({ error: "Please ask a longer question." }) };
   }
 
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   if (!OPENAI_API_KEY) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: "Missing OPENAI_API_KEY" }),
-    };
+    return { statusCode: 500, body: JSON.stringify({ error: "Missing OPENAI_API_KEY" }) };
   }
 
   const headers = {
@@ -74,38 +60,20 @@ exports.handler = async function (event) {
     const modRes = await fetch("https://api.openai.com/v1/moderations", {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        model: "omni-moderation-latest",
-        input: question,
-      }),
+      body: JSON.stringify({ model: "omni-moderation-latest", input: question }),
     });
     const modJson = await modRes.json();
     if (!modRes.ok) {
-      return {
-        statusCode: modRes.status,
-        body: JSON.stringify({
-          ok: false,
-          error: modJson?.error?.message || "Moderation failed",
-        }),
-      };
+      return { statusCode: modRes.status, body: JSON.stringify({ ok: false, error: modJson?.error?.message || "Moderation failed" }) };
     }
     if (modJson.results?.[0]?.flagged) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({
-          ok: false,
-          error: "Question blocked by moderation.",
-        }),
-      };
+      return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Question blocked by moderation." }) };
     }
   } catch {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ ok: false, error: "Moderation request failed" }),
-    };
+    return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Moderation request failed" }) };
   }
 
-  // 2) System prompt (your new guidance)
+  // 2) System prompt — Intake → Advice flow
   const sys = `
 System Prompt — Medical Information Chatbot
 
@@ -154,15 +122,19 @@ Style Details
 - If user seems distressed, acknowledge and respond empathetically.
 
 Output Rules
-- Decide which stage you are in and set \`stage\` to "intake" or "advice".
-- For intake: return a single concise \`chat_reply\` that is a batch of 5–8 questions, plus \`ask_back\` (a one-line final question).
-- For advice: fill the structured fields below. Keep \`chat_reply\` to 2–3 short sentences and use bullets for lists.
+- Decide which stage you are in and set "stage" to "intake" or "advice".
+- For intake: return a single concise "chat_reply" that is a batch of 5–8 questions, plus "ask_back" (a one-line final question).
+- For advice: fill the structured fields below. Keep "chat_reply" to 2–3 short sentences and use bullets for lists.
 `;
 
   const history = normalizeHistory(rawHistory);
-  const messages = [{ role: "system", content: sys }, ...history, { role: "user", content: question }];
+  const messages = [
+    { role: "system", content: sys },
+    ...history,
+    { role: "user", content: question }
+  ];
 
-  // 3) Structured output schema (intake or advice)
+  // 3) JSON schema (intake or advice)
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -172,7 +144,6 @@ Output Rules
       chat_reply: { type: "string" },
       ask_back: { type: "string" },
 
-      // Advice-stage sections (optional in intake)
       summary: { type: "string" },
       possible_causes: { type: "array", items: { type: "string" } },
       typical_treatments: { type: "array", items: { type: "string" } },
@@ -182,7 +153,7 @@ Output Rules
       final_reminder: { type: "string" },
       references: { type: "array", items: { type: "string" } },
 
-      // Back-compat fields (frontend can still use if present)
+      // back-compat fields
       edu_answer: { type: "string" },
       red_flags: { type: "array", items: { type: "string" } },
       when_to_seek_help: { type: "string" }
@@ -195,33 +166,27 @@ Output Rules
     input: messages,
     temperature: 0.2,
     max_output_tokens: 900,
-    // Correct structured output key
-    response_format: {
-      type: "json_schema",
-      json_schema: {
+    // ✅ Use text.format (what your account expects)
+    text: {
+      format: {
+        type: "json_schema",
         name: "MedQA_IntakeOrAdvice",
         schema,
-        // not strict: allow model to complete even if some optional sections are missing
+        // keep non-strict so minor formatting issues don't 400
+        strict: false
       }
     }
   };
 
   const res = await callOpenAIWithBackoff(headers, payload);
   let data;
-  try {
-    data = await res.json();
-  } catch {
-    data = null;
-  }
+  try { data = await res.json(); } catch { data = null; }
 
-  // Extract the JSON from the Responses API
   function parseOut(d) {
     try {
       if (d?.output_text) return JSON.parse(d.output_text);
       if (Array.isArray(d?.output)) {
-        const textItem = d.output[0]?.content?.find?.(
-          (c) => c.type === "output_text" || c.type === "text"
-        );
+        const textItem = d.output[0]?.content?.find?.(c => c.type === "output_text" || c.type === "text");
         if (textItem?.text) return JSON.parse(textItem.text);
       }
     } catch {}
@@ -235,16 +200,12 @@ Output Rules
       statusCode: res.status || 502,
       body: JSON.stringify({
         ok: false,
-        error:
-          data?.error?.message ||
-          "OpenAI response could not be parsed. Please try again.",
-        raw: data,
-      }),
+        error: data?.error?.message || "OpenAI response could not be parsed.",
+        raw: data
+      })
     };
   }
 
-  return {
-    statusCode: 200,
-    body: JSON.stringify({ ok: true, result: parsed }),
-  };
+  return { statusCode: 200, body: JSON.stringify({ ok: true, result: parsed }) };
 };
+
