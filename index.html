@@ -59,30 +59,34 @@
     </div>
   </form>
 
-  <!-- Education panel -->
+  <!-- Education panel (collapsed by default) -->
   <div id="result" class="card hidden">
-    <div id="disc" class="muted"></div>
-    <h3 style="margin:8px 0 6px">Education</h3>
-    <div id="edu"></div>
-    <h4 style="margin:10px 0 6px">Red flags</h4>
-    <ul id="flags"></ul>
-    <h4 style="margin:10px 0 6px">When to seek help</h4>
-    <div id="seek"></div>
-    <details style="margin-top:8px" id="refsWrap" class="hidden">
-      <summary>References</summary>
-      <ul id="refs"></ul>
+    <details id="eduDetails">
+      <summary><strong>Show details</strong> <span class="muted">(education, red flags, when to seek help)</span></summary>
+      <div id="disc" class="muted" style="margin-top:8px"></div>
+      <h3 style="margin:8px 0 6px">Education</h3>
+      <div id="edu"></div>
+      <h4 style="margin:10px 0 6px">Red flags</h4>
+      <ul id="flags"></ul>
+      <h4 style="margin:10px 0 6px">When to seek help</h4>
+      <div id="seek"></div>
+      <details style="margin-top:8px" id="refsWrap" class="hidden">
+        <summary>References</summary>
+        <ul id="refs"></ul>
+      </details>
     </details>
   </div>
 
   <script>
-    const chatEl = document.getElementById("chat");
-    const form   = document.getElementById("qform");
-    const btn    = document.getElementById("askBtn");
-    const newBtn = document.getElementById("newBtn");
-    const turnsEl= document.getElementById("turns");
+    const chatEl   = document.getElementById("chat");
+    const form     = document.getElementById("qform");
+    const btn      = document.getElementById("askBtn");
+    const newBtn   = document.getElementById("newBtn");
+    const turnsEl  = document.getElementById("turns");
     const typingEl = document.getElementById("typing");
     const ui = {
       result: document.getElementById("result"),
+      eduDetails: document.getElementById("eduDetails"),
       disc: document.getElementById("disc"),
       edu: document.getElementById("edu"),
       flags: document.getElementById("flags"),
@@ -120,6 +124,7 @@
       saveHistory();
       chatEl.innerHTML = "";
       ui.result.classList.add("hidden");
+      ui.eduDetails.open = false;
       typingEl.classList.add("hidden");
       document.getElementById("q").focus();
     });
@@ -144,10 +149,10 @@
 
         const { disclaimer, chat_reply, edu_answer, red_flags, when_to_seek_help, references, ask_back } = j.result;
 
-        // show chat-style nurse reply + one follow-up question
+        // show short chat reply + one follow-up question (conversational)
         addMsg("assistant", chat_reply + (ask_back ? `\n\n${ask_back}` : ""));
 
-        // update education panel
+        // Fill detail panel but keep it collapsed by default
         ui.disc.textContent = disclaimer || "General education only.";
         ui.edu.textContent = edu_answer || "";
         ui.flags.innerHTML = (red_flags || []).map(f => `<li>${f}</li>`).join("");
@@ -160,6 +165,7 @@
           ui.refs.innerHTML = "";
         }
         ui.result.classList.remove("hidden");
+        // keep collapsed: ui.eduDetails.open = false;
 
         // ---- add this turn to history (short assistant summary) ----
         history.push({ role: "user", content: question });
@@ -179,4 +185,5 @@
   </script>
 </body>
 </html>
+
 
