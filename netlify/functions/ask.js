@@ -31,7 +31,8 @@ exports.handler = async function (event) {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
-  const { question, history: rawHistory = [] } = JSON.parse(event.body || "{}");
+  const { question, history: rawHistory = [], images: rawImages = [] } = JSON.parse(event.body || "{}");
+
   if (!question || question.trim().length < 10) {
     return { statusCode: 400, body: JSON.stringify({ error: "Please ask a longer question." }) };
   }
@@ -65,34 +66,54 @@ exports.handler = async function (event) {
   }
 
   // 2) Build conversation
-  const sys = `You are a cautious triage nurse and medical educator for a PH + AU audience.
-- Provide general education only; do NOT give personal medical advice or diagnoses.
-- Use a warm, conversational tone. Keep replies short (≤ 8 sentences).
-- If the user’s message is unclear or missing key info, ask ONE gentle follow-up question at the end.
-- Prefer bullet points for steps or red flags.
-- Always include a strong disclaimer and “see a doctor” guidance for red flags.
-- Do not request or use personal identifiers (names, DOB, addresses, photos).`;
+  const sys = `You are "Doc Adams Q&A", a cautious triage nurse + medical educator for a PH + AU audience.
+- Provide general education only; do NOT give personal medical advice, diagnoses, or treatment plans.
+- Warm, conversational tone. Keep replies short (≤ 8 sentences).
+- ALWAYS include: possible causes → home remedies/self-care → possible investigations → possible treatments a doctor might do → end with a clear "please see a doctor".
+- Keep the red flags + when to seek urgent help.
+- If the user's message is unclear, ask ONE gentle follow-up question at the end.
+- Do not request or use personal identifiers (names, DOB, addresses, photos). If images are provided, treat them as coarse educational context only and avoid definitive diagnoses.`;
 
   const history = normalizeHistory(rawHistory);
-  const messages = [{ role: "system", content: sys }, ...history, { role: "user", content: question }];
 
-  // 3) Strict structured output (plus a conversational reply)
+  // Create user message content (text + optional images as data URLs)
+  const userContent = [{ type: "input_text", text: question }];
+  const safeImages = Array.isArray(rawImages) ? rawImages.slice(0, 3) : [];
+  for (const dataUrl of safeImages) {
+    if (typeof dataUrl === "string" && dataUrl.startsWith("data:")) {
+      userContent.push({ type: "input_image", image_url: { url: dataUrl } });
+    }
+  }
+
+  const messages = [
+    { role: "system", content: sys },
+    ...history,                              // history uses simple string content
+    { role: "user", content: userContent }   // current turn can be multimodal
+  ];
+
+  // 3) Strict structured output (nurse-style sections)
   const schema = {
     type: "object",
     additionalProperties: false,
     properties: {
-      disclaimer: { type: "string" },
-      chat_reply: { type: "string" },    // conversational nurse-style reply
-      edu_answer: { type: "string" },    // longer educational content (optional to show)
+      disclaimer: { type: "string" },          // strong Doc Adam disclaimer
+      chat_reply: { type: "string" },          // short conversational reply
+      possible_causes: { type: "array", items: { type: "string" } },
+      self_care: { type: "array", items: { type: "string" } },         // home remedies
+      investigations: { type: "array", items: { type: "string" } },
+      treatments: { type: "array", items: { type: "string" } },        // what a doctor might do
       red_flags: { type: "array", items: { type: "string" } },
       when_to_seek_help: { type: "string" },
       references: { type: "array", items: { type: "string" } },
-      ask_back: { type: "string" }       // one follow-up question to keep the convo going
+      ask_back: { type: "string" }             // one follow-up question
     },
     required: [
       "disclaimer",
       "chat_reply",
-      "edu_answer",
+      "possible_causes",
+      "self_care",
+      "investigations",
+      "treatments",
       "red_flags",
       "when_to_seek_help",
       "references",
@@ -104,11 +125,11 @@ exports.handler = async function (event) {
     model: "gpt-4o-mini",
     input: messages,
     temperature: 0.2,
-    max_output_tokens: 900,
+    max_output_tokens: 1100,
     text: {
       format: {
         type: "json_schema",
-        name: "MedQA",
+        name: "DocAdamsMedQA",
         strict: true,
         schema
       }
