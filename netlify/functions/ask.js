@@ -1,5 +1,4 @@
-// --- retry helper for 429 rate limits ---
-a// netlify/functions/ask.js  (Node 18+)
+// netlify/functions/ask.js  (Node 18+)
 
 // --- retry helper for 429 rate limits ---
 async function callOpenAIWithBackoff(headers, payload, tries = 3) {
@@ -90,13 +89,19 @@ exports.handler = async function (event) {
     });
     const modJson = await modRes.json();
     if (!modRes.ok) {
-      return cors({
-        ok: false,
-        error: modJson?.error?.message || "Moderation failed",
-      }, modRes.status);
+      return cors(
+        {
+          ok: false,
+          error: modJson?.error?.message || "Moderation failed",
+        },
+        modRes.status
+      );
     }
     if (modJson.results?.[0]?.flagged) {
-      return cors({ ok: false, error: "Question blocked by moderation." }, 400);
+      return cors(
+        { ok: false, error: "Question blocked by moderation." },
+        400
+      );
     }
   } catch {
     return cors({ ok: false, error: "Moderation request failed" }, 500);
@@ -187,6 +192,7 @@ exports.handler = async function (event) {
     input: messages, // Responses API supports multi-part content
     temperature: 0.25,
     max_output_tokens: isFollowUp ? 380 : 1100,
+    // IMPORTANT: correct structured output key
     response_format: {
       type: "json_schema",
       json_schema: {
@@ -206,10 +212,13 @@ exports.handler = async function (event) {
   }
 
   if (!res.ok) {
-    return cors({
-      ok: false,
-      error: data?.error?.message || data?.message || "OpenAI request failed",
-    }, res.status);
+    return cors(
+      {
+        ok: false,
+        error: data?.error?.message || data?.message || "OpenAI request failed",
+      },
+      res.status
+    );
   }
 
   // 4) Extract the JSON from the Responses API
@@ -229,3 +238,4 @@ exports.handler = async function (event) {
 
   return cors(parsed ? { ok: true, result: parsed } : { ok: false, raw: data });
 };
+
