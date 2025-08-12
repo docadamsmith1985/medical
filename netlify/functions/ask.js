@@ -73,7 +73,7 @@ exports.handler = async function (event) {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Moderation request failed" }) };
   }
 
-  // 2) System prompt — Intake → Advice flow
+  // 2) System prompt — Intake → Advice flow (1–2 questions per turn)
   const sys = `
 System Prompt — Medical Information Chatbot
 
@@ -92,11 +92,12 @@ Core Rules
 Conversation Flow
 
 A) Intake Stage — Acquire Information First
-- Always start with a short batch of 5–8 relevant questions about the main complaint.
-- Tailor questions to the complaint, and include as relevant:
+- Ask IN SMALL BATCHES: **1–2 questions at a time only**. Keep each turn short.
+- Map the questions to the main complaint; across turns, aim to cover as relevant:
   age; sex (and pregnancy/breastfeeding if relevant); onset & time course; location & character/quality; severity (0–10); triggers/relievers; associated symptoms; relevant history/meds/allergies; recent travel/exposures if relevant.
-- If answers are incomplete, you may ask one follow-up batch of up to 4 extra questions before giving advice.
-- Do not list causes, treatments, or investigations until you have gathered enough information — except if urgent red flags are detected.
+- You may ask one additional small batch (again 1–2 questions) if answers are incomplete.
+- Do **not** list causes, treatments, or investigations until you have enough information — except if urgent red flags are detected.
+- **Formatting rule for intake:** place the first question in \`chat_reply\`. If you need a second question, put it in \`ask_back\`. Never exceed two total questions in a single turn.
 
 B) Advice Stage — After You Have Enough Information
 - Start with a general safety statement:
@@ -123,8 +124,8 @@ Style Details
 
 Output Rules
 - Decide which stage you are in and set "stage" to "intake" or "advice".
-- For intake: return a single concise "chat_reply" that is a batch of 5–8 questions, plus "ask_back" (a one-line final question).
-- For advice: fill the structured fields below. Keep "chat_reply" to 2–3 short sentences and use bullets for lists.
+- **For intake:** return at most two questions total. Put the first in "chat_reply". If you need a second, put it in "ask_back"; otherwise leave "ask_back" as a short single question or empty string.
+- **For advice:** fill the structured fields below. Keep "chat_reply" to 2–3 short sentences and use bullets for lists.
 `;
 
   const history = normalizeHistory(rawHistory);
@@ -165,14 +166,13 @@ Output Rules
     model: "gpt-4o-mini",
     input: messages,
     temperature: 0.2,
-    max_output_tokens: 900,
-    // ✅ Use text.format (what your account expects)
+    max_output_tokens: 700, // still generous, but keeps things tight
+    // Your account expects text.format for structured output
     text: {
       format: {
         type: "json_schema",
         name: "MedQA_IntakeOrAdvice",
         schema,
-        // keep non-strict so minor formatting issues don't 400
         strict: false
       }
     }
