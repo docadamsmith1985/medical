@@ -8,8 +8,8 @@
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;line-height:1.45}
     h1{margin-bottom:6px}
     .disclaimer{background:#fff3cd;border:1px solid #ffe69c;padding:10px 12px;border-radius:10px;margin:8px 0 16px}
-    .chat{border:1px solid #eee;border-radius:12px;padding:12px;margin:12px 0;max-height:420px;overflow:auto}
-    .msg{margin:8px 0;padding:10px 12px;border-radius:12px;max-width:85%}
+    .chat{border:1px solid #eee;border-radius:12px;padding:12px;margin:12px 0;max-height:520px;overflow:auto}
+    .msg{margin:8px 0;padding:10px 12px;border-radius:12px;max-width:85%;white-space:pre-wrap}
     .me{background:#eef6ff;margin-left:auto}
     .bot{background:#f7f7f7}
     textarea{width:100%;min-height:90px;padding:10px;border-radius:10px;border:1px solid #ddd}
@@ -59,40 +59,8 @@
     </div>
   </form>
 
-  <!-- Advice panel (rendered only when stage === 'advice') -->
-  <div id="result" class="card hidden">
-    <details id="detailsBox">
-      <summary><strong>Show details</strong> <span class="muted">(causes, treatments, tests, self-care, urgent signs)</span></summary>
-
-      <div id="disc" class="muted" style="margin-top:8px"></div>
-
-      <h3 style="margin:8px 0 6px">Summary</h3>
-      <div id="summary"></div>
-
-      <h3 style="margin:8px 0 6px">Possible causes</h3>
-      <ul id="causes"></ul>
-
-      <h3 style="margin:8px 0 6px">Typical treatments (doctor-directed)</h3>
-      <ul id="treatments"></ul>
-
-      <h3 style="margin:8px 0 6px">Common investigations</h3>
-      <ul id="investigations"></ul>
-
-      <h3 style="margin:8px 0 6px">Safe self-care options</h3>
-      <ul id="selfcare"></ul>
-
-      <h3 style="margin:8px 0 6px">Urgent-care triggers</h3>
-      <ul id="urgent"></ul>
-
-      <h3 style="margin:8px 0 6px">Final reminder</h3>
-      <div id="final"></div>
-
-      <details style="margin-top:8px" id="refsWrap" class="hidden">
-        <summary>References</summary>
-        <ul id="refs"></ul>
-      </details>
-    </details>
-  </div>
+  <!-- Old details panel kept but hidden; we now write advice directly into chat -->
+  <div id="result" class="card hidden"></div>
 
   <script>
     const chatEl   = document.getElementById("chat");
@@ -101,20 +69,6 @@
     const newBtn   = document.getElementById("newBtn");
     const turnsEl  = document.getElementById("turns");
     const typingEl = document.getElementById("typing");
-    const ui = {
-      result: document.getElementById("result"),
-      detailsBox: document.getElementById("detailsBox"),
-      disc: document.getElementById("disc"),
-      summary: document.getElementById("summary"),
-      causes: document.getElementById("causes"),
-      treatments: document.getElementById("treatments"),
-      investigations: document.getElementById("investigations"),
-      selfcare: document.getElementById("selfcare"),
-      urgent: document.getElementById("urgent"),
-      final: document.getElementById("final"),
-      refsWrap: document.getElementById("refsWrap"),
-      refs: document.getElementById("refs"),
-    };
 
     // ---- conversation history (saved locally for follow-ups) ----
     let history = [];
@@ -140,20 +94,32 @@
       chatEl.scrollTop = chatEl.scrollHeight;
     }
 
-    function listify(arr){
-      if (!Array.isArray(arr) || !arr.length) return "<li>—</li>";
-      return arr.map(x => `<li>${escapeHtml(String(x))}</li>`).join("");
+    function bullet(label, arr){
+      if (!Array.isArray(arr) || !arr.length) return "";
+      return `${label}\n- ${arr.map(x => String(x)).join("\n- ")}`;
     }
-    function escapeHtml(s){
-      return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+    function formatAdvice(o){
+      const urgent = o.urgent_triggers || o.red_flags || [];
+      const finalLine = o.final_reminder || o.when_to_seek_help || "Please see a doctor for personalised advice.";
+      // Build one friendly, personalised message
+      const parts = [
+        o.disclaimer || "General education only — not medical advice.",
+        o.summary ? `Summary: ${o.summary}` : "",
+        bullet("Possible causes", o.possible_causes),
+        bullet("Typical treatments (doctor-directed)", o.typical_treatments),
+        bullet("Common investigations", o.common_investigations),
+        bullet("Safe self-care options", o.self_care),
+        bullet("Urgent-care triggers", urgent),
+        `Final reminder: ${finalLine}`
+      ].filter(Boolean);
+      return parts.join("\n\n");
     }
 
     newBtn.addEventListener("click", () => {
       history = [];
       saveHistory();
       chatEl.innerHTML = "";
-      ui.result.classList.add("hidden");
-      ui.detailsBox.open = false;
       typingEl.classList.add("hidden");
       document.getElementById("q").focus();
     });
@@ -179,44 +145,24 @@
         const o = j.result || {};
         const stage = o.stage || (Array.isArray(o.possible_causes) ? "advice" : "intake");
 
-        // Always show the conversational bit (short)
-        const chatReply = o.chat_reply || "";
-        const askBack = o.ask_back ? `\n\n${o.ask_back}` : "";
-        addMsg("assistant", chatReply + askBack);
+        if (stage === "advice") {
+          // Put the ENTIRE advice into the chat bubble (personalised via model's summary)
+          const adviceText = formatAdvice(o);
+          addMsg("assistant", adviceText);
+        } else {
+          // Intake: one question only
+          const chatReply = o.chat_reply || "";
+          addMsg("assistant", chatReply);
+        }
 
-        // Save turn in short form
+        // Save short turn to history
         history.push({ role: "user", content: question });
-        history.push({ role: "assistant", content: (chatReply + askBack).slice(0,800) });
+        const assistantContent = (stage === "advice"
+          ? (o.summary || o.chat_reply || "Advice provided.")
+          : (o.chat_reply || "")).slice(0, 800);
+        history.push({ role: "assistant", content: assistantContent });
         history = history.slice(-12);
         saveHistory();
-
-        // Render advice panel only during advice stage
-        if (stage === "advice") {
-          ui.disc.textContent = o.disclaimer || "General education only — not medical advice.";
-          ui.summary.textContent = o.summary || "";
-          ui.causes.innerHTML = listify(o.possible_causes || []);
-          ui.treatments.innerHTML = listify(o.typical_treatments || []);
-          ui.investigations.innerHTML = listify(o.common_investigations || []);
-          ui.selfcare.innerHTML = listify(o.self_care || []);
-          // back-compat for older names:
-          const urgent = o.urgent_triggers || o.red_flags || [];
-          ui.urgent.innerHTML = listify(urgent);
-          ui.final.textContent = o.final_reminder || (o.when_to_seek_help || "");
-          if (Array.isArray(o.references) && o.references.length) {
-            ui.refsWrap.classList.remove("hidden");
-            ui.refs.innerHTML = o.references.map(r => `<li>${escapeHtml(String(r))}</li>`).join("");
-          } else {
-            ui.refsWrap.classList.add("hidden");
-            ui.refs.innerHTML = "";
-          }
-          ui.result.classList.remove("hidden");
-          // keep details collapsed by default
-          ui.detailsBox.open = false;
-        } else {
-          // Intake stage: hide details
-          ui.result.classList.add("hidden");
-          ui.detailsBox.open = false;
-        }
 
       } catch (err) {
         const msg = err?.error?.message || err?.error || err?.message || "Something went wrong. Try again.";
@@ -229,4 +175,6 @@
   </script>
 </body>
 </html>
+
+
 
