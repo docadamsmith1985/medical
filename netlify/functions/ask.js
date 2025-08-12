@@ -1,5 +1,8 @@
 // netlify/functions/ask.js
 
+// === knobs ===
+const MAX_INTAKE_TURNS = 2; // ask 1 short question per turn, then switch to advice (change to 3 if you want one more)
+
 // --- retry helper for 429 rate limits ---
 async function callOpenAIWithBackoff(headers, payload, tries = 3) {
   let wait = 1000, last;
@@ -21,109 +24,115 @@ function normalizeHistory(raw) {
   const clean = raw
     .filter(t => t && (t.role === "user" || t.role === "assistant") && typeof t.content === "string")
     .map(t => ({ role: t.role, content: t.content.slice(0, 800) }));
-  return clean.slice(-12);
+  return clean.slice(-12); // ~6 Q/A turns
 }
 
-// deterministic fallback question (so we never send an empty bubble)
-function fallbackQuestion(step, userText="") {
+// --- topic aware fallback so we never send an empty bubble ---
+function fallbackQuestion(step, userText = "", topic = "") {
   const base = String(userText || "").toLowerCase();
-  const isMed = /(tablet|pill|capsule|dose|vitamin|supplement|medicine|medication)/.test(base);
-  const isRash = /\brash|itch|hives|spots?\b/.test(base);
-  const isHeadache = /\bheadache|head ache|migraine\b/.test(base);
-  const isAbdo = /\bstomach|tummy|belly|abd(omen|ominal)|epigastr/i.test(base);
+  const t = topic || (
+    /\buric|urate|gout/.test(base) ? "lab_test" :
+    /(tablet|pill|capsule|dose|vitamin|supplement|medicine|medication)/.test(base) ? "vitamin_or_med" :
+    /\brash|itch|hives|spots?/.test(base) ? "symptom_rash" :
+    /\b(headache|head ache|migraine)\b/.test(base) ? "symptom_headache" :
+    /\b(stomach|tummy|belly|abd(omen|ominal)|epigastr)/.test(base) ? "symptom_abdominal" :
+    "other"
+  );
 
-  const Q = [
-    isMed
-      ? "What’s the exact product and dose, and why are you taking it?"
-      : isRash
-      ? "When did the rash start, and where on your body is it most noticeable?"
-      : isHeadache
-      ? "How long has the headache been going on—did it start suddenly or gradually?"
-      : isAbdo
-      ? "When did the stomach pain start—did it come on suddenly or build up over time?"
-      : "How long has this been going on—did it start suddenly or gradually?",
-    isMed
-      ? "How long have you been using it, and any side effects so far?"
-      : isRash
-      ? "Is it itchy, painful, or spreading, and do you have a fever?"
-      : isHeadache
-      ? "How severe is it on a 0–10 scale, and any nausea, light sensitivity, or vision changes?"
-      : isAbdo
-      ? "Where exactly is the pain (upper, lower, central, one side), and how severe is it on a 0–10 scale?"
-      : "How severe is it on a 0–10 scale, and what makes it better or worse?",
-    isMed
-      ? "Do you take other meds or supplements, and do you have any medical conditions or allergies?"
-      : isRash
-      ? "Any new soaps, creams, detergents, foods, meds, or insect bites before it started?"
-      : isHeadache
-      ? "Where exactly is the pain (front, one side, behind an eye, whole head), and what does it feel like (throbbing, pressure, stabbing)?"
-      : isAbdo
-      ? "Is the pain sharp, crampy, or burning, and does it move or stay in one spot?"
-      : "Where exactly is it located, and what does it feel like (sharp, dull, crampy, burning)?",
-  ];
-  const pick = (Q[Math.min(step, Q.length - 1)] || Q[0]).trim();
-  return pick.endsWith("?") ? pick : pick + "?";
+  const Q = {
+    vitamin_or_med: [
+      "What’s the exact product and dose, and why are you taking it?",
+      "How long have you been using it, and any side effects so far?",
+      "Do you take other meds or supplements, and do you have any medical conditions or allergies?"
+    ],
+    lab_test: [
+      "What test are you asking about and what was the number and unit (if you have it)?",
+      "Why was the test done, and have you had symptoms like joint pain, swelling, or kidney issues?",
+      "When was the last test, and do you take any medicines that could affect it?"
+    ],
+    symptom_headache: [
+      "When did the headache start—sudden or gradual?",
+      "How severe is it (0–10), and any nausea, light sensitivity, or vision changes?",
+      "Where is it exactly (front/one side/behind an eye/whole head), and what does it feel like?"
+    ],
+    symptom_abdominal: [
+      "When did the stomach pain start—sudden or gradual?",
+      "Where is it (upper/lower/central/right/left), and how severe is it (0–10)?",
+      "Is it sharp, crampy, or burning, and does it move or stay in one spot?"
+    ],
+    symptom_rash: [
+      "When did the rash start, and where on your body is it most noticeable?",
+      "Is it itchy, painful, or spreading, and do you have a fever?",
+      "Any new soaps, creams, detergents, foods, meds, or insect bites before it started?"
+    ],
+    other: [
+      "When did this start—sudden or gradual?",
+      "How severe is it (0–10), and what makes it better or worse?",
+      "Where exactly is it, and what does it feel like?"
+    ]
+  };
+
+  const arr = Q[t] || Q.other;
+  const s = arr[Math.min(step, arr.length - 1)];
+  return s.endsWith("?") ? s : s + "?";
 }
 
-// system prompt (one question/turn; advice after 2 assistant turns; personalised advice)
+// --- system prompt (topic-aware; one question/turn; advice after MAX_INTAKE_TURNS; personalised advice) ---
 function buildSystemPrompt(assistantTurns) {
   return `
-System Prompt — Medical Information Chatbot
-
 You are a conversational medical information assistant.
+
+Goal
 1) First collect key information, then 2) give structured, practical, safe, non-personalised guidance.
-Do not jump straight to “see a doctor” or list treatments until you have asked relevant questions — unless there are clear emergency red flags.
+Do not jump straight to “see a doctor” or list treatments until you have asked relevant questions—unless emergency red flags.
 
 Core Rules
 - Tone: calm, respectful, concise, conversational.
-- Scope: education only. You can make mistakes. This is not medical advice, diagnosis, or prescription.
+- Scope: education only. You can make mistakes. Not medical advice, diagnosis, or prescription.
 - Privacy: never ask for full names, exact addresses, or personal identifiers.
-- Safety: if you detect red flags (e.g., severe/worsening chest pain, breathing trouble, stroke signs, sepsis signs, suicidal thoughts, pregnancy emergencies, anaphylaxis, major trauma), immediately give a clear urgent-care warning and say why.
+- Safety: if you detect red flags (e.g., severe/worsening chest pain, breathing trouble, stroke signs, sepsis signs, suicidal thoughts, pregnancy emergencies, anaphylaxis, major trauma), give a clear urgent-care warning and say why.
 
-Conversation Flow
-
-A) Intake — Acquire Information First
-- Ask **exactly ONE question per turn** (no more than one).
-- Across early turns, aim to cover as relevant: age; sex (pregnancy/breastfeeding if relevant); onset & time course; location & character/quality; severity (0–10); triggers/relievers; associated symptoms; relevant history/meds/allergies; relevant exposures.
-- Do NOT list causes/treatments/tests until enough info is gathered — except if urgent red flags are detected.
-- Formatting for intake: put your single question in "chat_reply". Leave "ask_back" empty.
-
-B) Advice — After You Have Enough Information
-- Start with: "I cannot give a specific diagnosis, treatment, or investigation for you personally. This is for general education only. I can, however, share what sometimes causes symptoms like yours, common treatments doctors may use, and tests they may consider."
-- Then provide, in this order (concise, **personalise to user details**):
-  1) Summary (weave in their specifics: timing, location, severity, associated symptoms).
-  2) Possible causes (2–5) with short explanations tied to their details.
-  3) Typical treatments (general approaches; no personal dosing), note which might fit the story.
-  4) Common investigations (what doctors may consider) with brief “because …” links to their story.
-  5) Safe self-care options tailored where appropriate.
-  6) Urgent-care triggers (specific warning signs) — highlight those most relevant here.
-  7) Final reminder — "Please see a doctor for personalised advice."
+Topic & Flow
+- First, infer a topic_type: one of
+  ["symptom","vitamin_or_med","lab_test","chronic_condition","lifestyle","admin","other"].
+- Intake: ask **exactly ONE short question (<25 words)** per turn, tailored to topic_type.
+  Across the first few turns, aim to cover (as relevant): age; sex (pregnancy/breastfeeding if relevant); onset/time course;
+  location & character; severity (0–10); triggers/relievers; associated symptoms; relevant history/meds/allergies; exposures.
+  Output for intake = put the single question in "chat_reply". Leave "ask_back" empty.
+- Advice: after enough info, start with this safety statement:
+  "I cannot give a specific diagnosis, treatment, or investigation for you personally. This is for general education only.
+   I can, however, share what sometimes causes symptoms like yours, common treatments doctors may use, and tests they may consider."
+  Then provide (concise, tie points to the user's details):
+   1) summary; 2) possible_causes (2–5); 3) typical_treatments; 4) common_investigations;
+   5) self_care; 6) urgent_triggers; 7) final_reminder ("Please see a doctor for personalised advice.").
 
 Style
-- Plain English first; brief medical terms in brackets only if helpful. Be concise. Avoid certainty (“could be”, “sometimes”).
-- If user seems distressed, be empathetic.
+- Plain English first; brief medical terms in brackets only if helpful. Avoid certainty (“could be”, “sometimes”).
+- Be empathetic if the user sounds distressed.
 
-Output Rules
-- Set "stage" to "intake" or "advice".
-- Intake: ONE question only → "chat_reply"; leave "ask_back" "".
-- Advice: fill the structured fields; keep "chat_reply" to 2–3 short sentences.
+Output JSON
+- stage: "intake" or "advice"
+- topic_type: from the list above
+- chat_reply: string (for intake: single short question; for advice: 2–3 sentence intro)
+- ask_back: string (usually empty during intake)
+- summary, possible_causes[], typical_treatments[], common_investigations[], self_care[], urgent_triggers[], final_reminder, references[]
 
 Control
-- assistant_turns_in_history = ${assistantTurns}.
-- If assistant_turns_in_history < 2 and no emergency → stage="intake" this turn.
-- If assistant_turns_in_history >= 2 OR emergency red flags → stage="advice" now (no questions this turn).
-- Never output more than one question in a single turn.
+- assistant_turns_in_history = ${assistantTurns}
+- If assistant_turns_in_history < ${MAX_INTAKE_TURNS} and no emergency → stage="intake".
+- If assistant_turns_in_history ≥ ${MAX_INTAKE_TURNS} OR emergency red flags → stage="advice" now (no questions this turn).
+- Never output more than ONE question in a single intake turn.
 `;
 }
 
-// ensure a single, non-empty question during intake
+// keep only one question and ensure it ends with '?'
 function enforceOneQuestion(o, step, userText) {
   let q = (o.chat_reply || "").trim();
   const qm = q.indexOf("?");
   if (qm !== -1) q = q.slice(0, qm + 1);
-  if (!q || !q.endsWith("?")) q = fallbackQuestion(step, userText);
+  if (!q || !q.endsWith("?")) q = fallbackQuestion(step, userText, o.topic_type || "");
   o.chat_reply = q;
-  o.ask_back = "";
+  o.ask_back = ""; // intake uses only one question
   return o;
 }
 
@@ -138,8 +147,9 @@ exports.handler = async function (event) {
   catch { return { statusCode: 400, body: JSON.stringify({ ok:false, error:"Invalid JSON" }) }; }
 
   const { question, history: rawHistory = [] } = body;
-  if (!question || question.trim().length < 4) { // allow short answers like "7/10"
-    return { statusCode: 400, body: JSON.stringify({ error: "Please provide a bit more detail." }) };
+  // allow very short replies like "7/10"
+  if (!question || question.trim().length < 2) {
+    return { statusCode: 400, body: JSON.stringify({ error: "Please add a bit more detail." }) };
   }
 
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -183,6 +193,7 @@ exports.handler = async function (event) {
     additionalProperties: false,
     properties: {
       stage: { type: "string", enum: ["intake", "advice"] },
+      topic_type: { type: "string" },
       disclaimer: { type: "string" },
       chat_reply: { type: "string" },
       ask_back: { type: "string" },
@@ -196,7 +207,7 @@ exports.handler = async function (event) {
       final_reminder: { type: "string" },
       references: { type: "array", items: { type: "string" } },
 
-      // back-compat (unused by UI now, but won’t hurt)
+      // legacy (safe to ignore)
       edu_answer: { type: "string" },
       red_flags: { type: "array", items: { type: "string" } },
       when_to_seek_help: { type: "string" }
@@ -206,14 +217,15 @@ exports.handler = async function (event) {
 
   async function callOnce(forceAdvice = false) {
     const messages = forceAdvice
-      ? [{ role: "system", content: 'CONTROL: Respond with stage="advice" now. Do not ask questions this turn unless there are immediate emergency red flags.' }, ...baseMessages]
+      ? [{ role: "system", content: 'CONTROL: Respond with stage="advice" now. Do not ask further questions this turn unless there are immediate emergency red flags.' }, ...baseMessages]
       : baseMessages;
 
     const payload = {
       model: "gpt-4o-mini",
       input: messages,
       temperature: 0.2,
-      max_output_tokens: 800,
+      max_output_tokens: 900,
+      // Responses API → use text.format
       text: {
         format: {
           type: "json_schema",
@@ -244,29 +256,41 @@ exports.handler = async function (event) {
   // First attempt
   let { ok, parsed, raw, status } = await callOnce(false);
 
-  // Force advice after **2 assistant turns** if it still didn't switch
-  if ((!ok || !parsed || parsed.stage !== "advice") && assistantTurns >= 2) {
+  // Force advice after MAX_INTAKE_TURNS if model didn't switch
+  if ((!ok || !parsed || parsed.stage !== "advice") && assistantTurns >= MAX_INTAKE_TURNS) {
     ({ ok, parsed, raw, status } = await callOnce(true));
   }
 
+  // If still bad, return a safe intake question so UI never blanks
   if (!ok || !parsed) {
-    return {
-      statusCode: status || 502,
-      body: JSON.stringify({ ok:false, error: raw?.error?.message || "OpenAI response could not be parsed.", raw })
+    const step = Math.min(assistantTurns, MAX_INTAKE_TURNS - 1);
+    const safe = {
+      stage: "intake",
+      topic_type: "other",
+      chat_reply: fallbackQuestion(step, question),
+      disclaimer: "General education only — not medical advice."
     };
+    return { statusCode: 200, body: JSON.stringify({ ok:true, result: safe, raw }) };
   }
 
-  // Intake: enforce single, non-empty question; synthesize one if missing
+  // Intake: enforce single, non-empty question
   if (parsed.stage === "intake") {
-    parsed = enforceOneQuestion(parsed, Math.min(assistantTurns, 2), question);
+    parsed = enforceOneQuestion(parsed, Math.min(assistantTurns, MAX_INTAKE_TURNS - 1), question);
   }
 
-  // Advice: fill defaults
+  // Advice: ensure defaults and a brief intro
   if (parsed.stage === "advice") {
     parsed.disclaimer = parsed.disclaimer || "General education only — not medical advice.";
-    parsed.final_reminder = parsed.final_reminder || (parsed.when_to_seek_help || "Please see a doctor for personalised advice.");
+    if (!parsed.chat_reply || !parsed.chat_reply.trim()) {
+      parsed.chat_reply = "Here’s a general overview based on what you’ve shared.";
+    }
+  }
+
+  // Absolute safeguard: never return an empty chat_reply
+  if (!parsed.chat_reply || !parsed.chat_reply.trim()) {
+    parsed.stage = "intake";
+    parsed.chat_reply = fallbackQuestion(Math.min(assistantTurns, MAX_INTAKE_TURNS - 1), question, parsed.topic_type);
   }
 
   return { statusCode: 200, body: JSON.stringify({ ok:true, result: parsed }) };
 };
-
