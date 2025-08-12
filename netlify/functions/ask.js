@@ -1,3 +1,21 @@
+// Simple retry helper for 429 rate limits
+async function callOpenAIWithBackoff(headers, payload, tries = 3) {
+  let wait = 1000; // 1s → 2s → 4s
+  let last;
+  for (let i = 0; i < tries; i++) {
+    const res = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+    if (res.status !== 429) return res; // success or non-429 error
+    last = res;
+    await new Promise(r => setTimeout(r, wait));
+    wait *= 2;
+  }
+  return last;
+}
+
 // Netlify Function: server-side proxy (keeps your OpenAI key secret)
 export async function handler(event) {
   if (event.httpMethod !== "POST") {
@@ -26,11 +44,11 @@ export async function handler(event) {
     body: JSON.stringify({ model: "omni-moderation-latest", input: question })
   });
   const modJson = await modRes.json();
-  if (modRes.status !== 200) {
-    return { statusCode: modRes.status, body: JSON.stringify(modJson) };
+  if (!modRes.ok) {
+    return { statusCode: modRes.status, body: JSON.stringify({ ok: false, error: modJson?.error?.message || "Moderation failed" }) };
   }
   if (modJson.results?.[0]?.flagged) {
-    return { statusCode: 400, body: JSON.stringify({ error: "Question blocked by moderation." }) };
+    return { statusCode: 400, body: JSON.stringify({ ok: false, error: "Question blocked by moderation." }) };
   }
 
   // 2) Ask the model with a strict JSON schema (Structured Outputs)
@@ -52,23 +70,24 @@ export async function handler(event) {
 - Always include a strong disclaimer and “see a doctor” guidance for red flags.
 - Do not request or use personal identifiers (names, DOB, addresses, photos).`;
 
-  const res = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      input: [
-        { role: "system", content: sys },
-        { role: "user", content: `Question: ${question}\nReturn JSON matching the schema keys.` }
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: { name: "MedQA", strict: true, schema }
-      }
-    })
-  });
+  const payload = {
+    model: "gpt-4o-mini",
+    input: [
+      { role: "system", content: sys },
+      { role: "user", content: `Question: ${question}\nReturn JSON matching the schema keys.` }
+    ],
+    response_format: { type: "json_schema", json_schema: { name: "MedQA", strict: true, schema } }
+  };
 
+  const res = await callOpenAIWithBackoff(headers, payload);
   const data = await res.json();
+
+  if (!res.ok) {
+    return {
+      statusCode: res.status,
+      body: JSON.stringify({ ok: false, error: data?.error?.message || data?.message || "OpenAI request failed" })
+    };
+  }
 
   // Try to extract the structured JSON from Responses API
   let parsed;
@@ -78,16 +97,5 @@ export async function handler(event) {
     } else if (Array.isArray(data.output)) {
       const first = data.output[0];
       const textItem = first?.content?.find?.(c => c.type === "output_text" || c.type === "text");
-      parsed = JSON.parse(textItem?.text ?? "{}");
-    }
-  } catch {
-    // fall back to raw
-  }
+      parsed = JS
 
-  return {
-    statusCode: res.status,
-    body: JSON.stringify(
-      parsed ? { ok: true, result: parsed } : { ok: false, raw: data }
-    )
-  };
-}
