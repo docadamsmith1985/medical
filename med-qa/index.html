@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Medical Q&A — Education Only</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;line-height:1.45}
+    h1{margin-bottom:6px}
+    .disclaimer{background:#fff3cd;border:1px solid #ffe69c;padding:10px 12px;border-radius:10px;margin:8px 0 16px}
+    textarea{width:100%;min-height:120px;padding:10px;border-radius:10px;border:1px solid #ddd}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #ddd;cursor:pointer}
+    .card{border:1px solid #eee;border-radius:12px;padding:12px;margin-top:14px}
+    .muted{opacity:.8;font-size:.92em}
+    .hidden{display:none}
+  </style>
+</head>
+<body>
+  <h1>Medical Q&amp;A <span class="muted">— general education only</span></h1>
+  <div class="disclaimer"><strong>Important:</strong> This is <em>not</em> medical advice. Huwag maglagay ng personal data (pangalan, address, birthday, photos). If you have new, severe, or worsening symptoms, see a doctor or go to ED.</div>
+
+  <form id="qform">
+    <label for="q" class="muted">Your question (no personal info):</label>
+    <textarea id="q" placeholder="e.g., 'Bakit namamaga at masakit ang big toe ko?'" required minlength="10" maxlength="800"></textarea>
+    <div style="margin-top:8px">
+      <button type="submit">Ask</button>
+    </div>
+  </form>
+
+  <div id="result" class="card hidden">
+    <div id="disc" class="muted"></div>
+    <h3 style="margin:8px 0 6px">Answer</h3>
+    <div id="edu"></div>
+    <h4 style="margin:10px 0 6px">Red flags</h4>
+    <ul id="flags"></ul>
+    <h4 style="margin:10px 0 6px">When to seek help</h4>
+    <div id="seek"></div>
+    <details style="margin-top:8px" id="refsWrap" class="hidden">
+      <summary>References</summary>
+      <ul id="refs"></ul>
+    </details>
+  </div>
+
+  <script>
+    const form = document.getElementById("qform");
+    const ui = {
+      result: document.getElementById("result"),
+      disc: document.getElementById("disc"),
+      edu: document.getElementById("edu"),
+      flags: document.getElementById("flags"),
+      seek: document.getElementById("seek"),
+      refsWrap: document.getElementById("refsWrap"),
+      refs: document.getElementById("refs"),
+    };
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const question = document.getElementById("q").value.trim();
+      ui.result.classList.add("hidden");
+      try {
+        const r = await fetch("/.netlify/functions/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question })
+        });
+        const j = await r.json();
+        if (!j.ok) throw j;
+
+        const { disclaimer, edu_answer, red_flags, when_to_seek_help, references } = j.result;
+        ui.disc.textContent = disclaimer || "General education only.";
+        ui.edu.textContent = edu_answer || "";
+        ui.flags.innerHTML = (red_flags || []).map(f => `<li>${f}</li>`).join("");
+        ui.seek.textContent = when_to_seek_help || "";
+
+        if (Array.isArray(references) && references.length) {
+          ui.refsWrap.classList.remove("hidden");
+          ui.refs.innerHTML = references.map(r => `<li>${r}</li>`).join("");
+        } else {
+          ui.refsWrap.classList.add("hidden");
+          ui.refs.innerHTML = "";
+        }
+
+        ui.result.classList.remove("hidden");
+      } catch (err) {
+        alert((err && err.error) ? err.error : "Something went wrong. Try again.");
+      }
+    });
+  </script>
+</body>
+</html>
