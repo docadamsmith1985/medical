@@ -45,7 +45,7 @@ function cors(json, status = 200) {
   };
 }
 
-// Netlify Function (CommonJS)
+// ------------ main handler ------------
 exports.handler = async function (event) {
   if (event.httpMethod === "OPTIONS") {
     return cors({ ok: true });
@@ -142,13 +142,13 @@ exports.handler = async function (event) {
     { role: "user", content: userContent },
   ];
 
-  // 3) Structured outputs
+  // 3) Structured outputs (loosened)
   const schemaInitial = {
     type: "object",
-    additionalProperties: false,
+    additionalProperties: true, // allow harmless extras
     properties: {
       disclaimer: { type: "string" },
-      chat_reply: { type: "string" },
+      chat_reply: { type: "string", minLength: 1 },
       possible_causes: { type: "array", items: { type: "string" } },
       self_care: { type: "array", items: { type: "string" } },
       investigations: { type: "array", items: { type: "string" } },
@@ -156,29 +156,18 @@ exports.handler = async function (event) {
       red_flags: { type: "array", items: { type: "string" } },
       when_to_seek_help: { type: "string" },
       references: { type: "array", items: { type: "string" } },
-      ask_back: { type: "string" },
+      ask_back: { type: "string", minLength: 1 },
     },
-    required: [
-      "disclaimer",
-      "chat_reply",
-      "possible_causes",
-      "self_care",
-      "investigations",
-      "treatments",
-      "red_flags",
-      "when_to_seek_help",
-      "references",
-      "ask_back",
-    ],
+    required: ["chat_reply", "ask_back"], // make most fields optional
   };
 
   const schemaFollowup = {
     type: "object",
-    additionalProperties: false,
+    additionalProperties: true,
     properties: {
       disclaimer: { type: "string" },
-      chat_reply: { type: "string" },
-      ask_back: { type: "string" },
+      chat_reply: { type: "string", minLength: 1 },
+      ask_back: { type: "string", minLength: 1 },
       notes: { type: "array", items: { type: "string" } },
       red_flags: { type: "array", items: { type: "string" } },
     },
@@ -187,55 +176,100 @@ exports.handler = async function (event) {
 
   const schema = isFollowUp ? schemaFollowup : schemaInitial;
 
-  const payload = {
+  // Try structured first; if it fails, fall back to plain text
+  const structuredPayload = {
     model: "gpt-4o-mini",
-    input: messages, // Responses API supports multi-part content
+    input: messages,
     temperature: 0.25,
     max_output_tokens: isFollowUp ? 380 : 1100,
-    // IMPORTANT: correct structured output key
     response_format: {
       type: "json_schema",
       json_schema: {
         name: isFollowUp ? "DocAdamsMedQA_Followup" : "DocAdamsMedQA",
         schema,
-        strict: true,
+        // STRICT REMOVED to avoid hard validation failures
       },
     },
   };
 
-  const res = await callOpenAIWithBackoff(headers, payload);
+  // --- attempt structured call ---
+  const res = await callOpenAIWithBackoff(headers, structuredPayload);
   let data;
   try {
     data = await res.json();
   } catch {
-    return cors({ ok: false, error: "Non-JSON response from OpenAI" }, 502);
+    data = null;
   }
 
-  if (!res.ok) {
-    return cors(
+  // Helper to parse structured response
+  function tryParseStructured(d) {
+    try {
+      if (d?.output_text) return JSON.parse(d.output_text);
+      if (Array.isArray(d?.output)) {
+        const textItem = d.output[0]?.content?.find?.(
+          (c) => c.type === "output_text" || c.type === "text"
+        );
+        if (textItem?.text) return JSON.parse(textItem.text);
+      }
+    } catch {}
+    return null;
+  }
+
+  let parsed = tryParseStructured(data);
+
+  // If structured failed due to validation or parsing, do a plain-text fallback
+  const validationFailed =
+    !res.ok ||
+    !parsed ||
+    (data?.error?.message &&
+      /schema|pattern|validate|expected/i.test(String(data.error.message)));
+
+  if (validationFailed) {
+    // Build a compact, safe plain-text answer
+    const fallbackMessages = [
       {
-        ok: false,
-        error: data?.error?.message || data?.message || "OpenAI request failed",
+        role: "system",
+        content:
+          'You are "Doc Adams Q&A". Give short, safe, general education only. No diagnosis. Finish with one clarifying question.',
       },
-      res.status
-    );
-  }
+      { role: "user", content: [{ type: "input_text", text: question }] },
+    ];
 
-  // 4) Extract the JSON from the Responses API
-  let parsed;
-  try {
-    if (data.output_text) {
-      parsed = JSON.parse(data.output_text);
-    } else if (Array.isArray(data.output)) {
-      const textItem = data.output[0]?.content?.find?.(
+    const fallbackPayload = {
+      model: "gpt-4o-mini",
+      input: fallbackMessages,
+      temperature: 0.25,
+      max_output_tokens: 400,
+    };
+
+    const fbRes = await callOpenAIWithBackoff(headers, fallbackPayload);
+    let fbData;
+    try {
+      fbData = await fbRes.json();
+    } catch {}
+
+    let textOut = "";
+    if (fbData?.output_text) textOut = fbData.output_text;
+    else if (Array.isArray(fbData?.output)) {
+      const item = fbData.output[0]?.content?.find?.(
         (c) => c.type === "output_text" || c.type === "text"
       );
-      if (textItem?.text) parsed = JSON.parse(textItem.text);
+      textOut = item?.text || "";
     }
-  } catch {
-    // fall through
+
+    // Return minimal shape the frontend understands
+    return cors({
+      ok: true,
+      result: {
+        chat_reply: textOut || "Sorry, I couldn't generate a reply.",
+        ask_back:
+          "Can you share a bit more detail about your symptoms or timeline?",
+      },
+      _fallback: true,
+    });
   }
 
-  return cors(parsed ? { ok: true, result: parsed } : { ok: false, raw: data });
+  // Structured success
+  return cors({ ok: true, result: parsed });
 };
 
