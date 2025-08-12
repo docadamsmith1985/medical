@@ -76,75 +76,92 @@ exports.handler = async function (event) {
   }
 
   // 2) Build conversation
-  const sys = `You are "Doc Adams Q&A", a cautious triage nurse + medical educator for a PH + AU audience.
-- Provide general education only; do NOT give personal medical advice, diagnoses, or treatment plans.
-- Warm, conversational tone. Keep replies short (≤ 8 sentences).
-- ALWAYS include: possible causes → home remedies/self-care → possible investigations → possible treatments a doctor might do → end with a clear "please see a doctor".
-- Keep the red flags + when to seek urgent help.
-- If the user's message is unclear, ask ONE gentle follow-up question at the end.
-- Do not request or use personal identifiers (names, DOB, addresses, photos). If images are provided, treat them as coarse educational context only and avoid definitive diagnoses.`;
-
   const history = normalizeHistory(rawHistory);
+  const isFollowUp = history.length >= 2; // after first full turn, treat as follow-up
+
+  const sysInitial = `You are "Doc Adams Q&A", a cautious triage nurse + medical educator for a PH + AU audience.
+- Provide general education only; do NOT give personal medical advice, diagnoses, or treatment plans.
+- Warm, conversational tone.
+- For the FIRST user message in a conversation: provide a compact but complete overview with sections:
+  possible causes → home remedies/self-care → possible investigations → treatments a doctor might do → red flags → when to seek help.
+- Keep language short and scannable.`;
+
+  const sysFollowup = `You are "Doc Adams Q&A".
+- This is a FOLLOW-UP in the same conversation.
+- Be brief (2–4 sentences), conversational, and do NOT repeat earlier long lists unless specifically asked.
+- Add NEW or clarifying info only, and finish with ONE short, targeted question to move the triage forward.
+- If new red-flag features are suggested, briefly point them out.`;
+
+  const sys = isFollowUp ? sysFollowup : sysInitial;
 
   // Create user message content (text + optional images as data URLs)
   const userContent = [{ type: "input_text", text: question }];
   const safeImages = Array.isArray(rawImages) ? rawImages.slice(0, 3) : [];
   for (const dataUrl of safeImages) {
     if (typeof dataUrl === "string" && dataUrl.startsWith("data:")) {
-      // FIX: image_url must be a STRING, not { url: ... }
+      // image_url must be a STRING
       userContent.push({ type: "input_image", image_url: dataUrl });
     }
   }
 
   const messages = [
     { role: "system", content: sys },
-    ...history, // prior turns as plain text messages
-    { role: "user", content: userContent }, // current turn can be multimodal
+    ...history,
+    { role: "user", content: userContent },
   ];
 
-  // 3) Strict structured output (nurse-style sections)
-  const schema = {
+  // 3) Structured outputs
+  const schemaInitial = {
     type: "object",
     additionalProperties: false,
     properties: {
-      disclaimer: { type: "string" },          // strong Doc Adam disclaimer
-      chat_reply: { type: "string" },          // short conversational reply
+      disclaimer: { type: "string" },
+      chat_reply: { type: "string" },
       possible_causes: { type: "array", items: { type: "string" } },
-      self_care: { type: "array", items: { type: "string" } },         // home remedies
+      self_care: { type: "array", items: { type: "string" } },
       investigations: { type: "array", items: { type: "string" } },
-      treatments: { type: "array", items: { type: "string" } },        // what a doctor might do
+      treatments: { type: "array", items: { type: "string" } },
       red_flags: { type: "array", items: { type: "string" } },
       when_to_seek_help: { type: "string" },
       references: { type: "array", items: { type: "string" } },
-      ask_back: { type: "string" },            // one follow-up question
+      ask_back: { type: "string" }
     },
     required: [
-      "disclaimer",
-      "chat_reply",
-      "possible_causes",
-      "self_care",
-      "investigations",
-      "treatments",
-      "red_flags",
-      "when_to_seek_help",
-      "references",
-      "ask_back",
-    ],
+      "disclaimer","chat_reply",
+      "possible_causes","self_care","investigations","treatments",
+      "red_flags","when_to_seek_help","references","ask_back"
+    ]
   };
+
+  // Follow-ups: only short reply + one question; all other fields optional
+  const schemaFollowup = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      disclaimer: { type: "string" },
+      chat_reply: { type: "string" },
+      ask_back: { type: "string" },
+      notes: { type: "array", items: { type: "string" } },   // optional quick bullets if needed
+      red_flags: { type: "array", items: { type: "string" } } // optional if NEW red flags arise
+    },
+    required: ["chat_reply","ask_back"]
+  };
+
+  const schema = isFollowUp ? schemaFollowup : schemaInitial;
 
   const payload = {
     model: "gpt-4o-mini",
     input: messages,
-    temperature: 0.2,
-    max_output_tokens: 1100,
+    temperature: 0.25,
+    max_output_tokens: isFollowUp ? 380 : 1100,
     text: {
       format: {
         type: "json_schema",
-        name: "DocAdamsMedQA",
+        name: isFollowUp ? "DocAdamsMedQA_Followup" : "DocAdamsMedQA",
         strict: true,
-        schema,
-      },
-    },
+        schema
+      }
+    }
   };
 
   const res = await callOpenAIWithBackoff(headers, payload);
@@ -158,7 +175,7 @@ exports.handler = async function (event) {
         error: data?.error?.message || data?.message || "OpenAI request failed",
       }),
     };
-    }
+  }
 
   // 4) Extract the JSON from the Responses API
   let parsed;
