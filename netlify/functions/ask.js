@@ -55,9 +55,10 @@ exports.handler = async function (event) {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Moderation request failed" }) };
   }
 
-  // 2) Ask the model with Structured Output (NOTE: text.format with name + schema)
+  // 2) Ask the model with Structured Output
   const schema = {
     type: "object",
+    additionalProperties: false, // <-- required by Responses API structured outputs
     properties: {
       disclaimer: { type: "string" },
       edu_answer: { type: "string" },
@@ -83,7 +84,7 @@ exports.handler = async function (event) {
     text: {
       format: {
         type: "json_schema",
-        name: "MedQA",     // ← this 'name' fixes your current error
+        name: "MedQA",
         strict: true,
         schema
       }
