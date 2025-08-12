@@ -55,10 +55,10 @@ exports.handler = async function (event) {
     return { statusCode: 500, body: JSON.stringify({ ok: false, error: "Moderation request failed" }) };
   }
 
-  // 2) Ask the model with Structured Output
+  // 2) Ask the model with Structured Output (Responses API uses text.format)
   const schema = {
     type: "object",
-    additionalProperties: false, // <-- required by Responses API structured outputs
+    additionalProperties: false,
     properties: {
       disclaimer: { type: "string" },
       edu_answer: { type: "string" },
@@ -66,7 +66,8 @@ exports.handler = async function (event) {
       when_to_seek_help: { type: "string" },
       references: { type: "array", items: { type: "string" } }
     },
-    required: ["disclaimer", "edu_answer", "red_flags", "when_to_seek_help"]
+    // 👇 strict requires every property to appear here:
+    required: ["disclaimer", "edu_answer", "red_flags", "when_to_seek_help", "references"]
   };
 
   const sys = `You are a cautious medical educator (PH + AU audience).
