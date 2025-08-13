@@ -1,20 +1,28 @@
 // ask.js
-// Minimal Express server that calls OpenAI and returns a clean, safe, structured answer.
-// Env: set OPENAI_API_KEY. Run: node ask.js  (Node 18+ recommended)
-
+// Run: OPENAI_API_KEY=sk-... node ask.js
 import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 
-// Use built-in fetch on Node 18+. If older Node, uncomment next line and `npm i node-fetch`
+// If you're on Node <18, uncomment next line and `npm i node-fetch`
 // import fetch from "node-fetch";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json());
 
 // ====== CONFIG ======
+const PORT = process.env.PORT || 3000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const MODEL = "gpt-5-thinking"; // or your preferred model
+const MODEL = "gpt-4o-mini"; // pick one you have access to
 
-// ====== SYSTEM PROMPT (MASTER STYLE GUIDE) ======
+if (!OPENAI_API_KEY) {
+  console.warn("⚠️  OPENAI_API_KEY is not set. Set it before starting the server.");
+}
+
+// ====== SYSTEM PROMPT ======
 const SYSTEM_PROMPT = `
 You are Doc Adam's medical information assistant. Your job is to give
 clear, educational, and safe general health information.
@@ -79,7 +87,7 @@ Style:
 - Be firm when evidence is weak or negative.
 `;
 
-// ====== Simple client-side classifier to hint the model ======
+// ====== Simple classifier ======
 function classifyQuestion(userText) {
   const t = (userText || "").toLowerCase();
 
@@ -94,7 +102,7 @@ function classifyQuestion(userText) {
     "i have", "i’m having", "im having", "my child has", "my kid has",
     "pain", "fever", "rash", "cough", "urine", "bleeding", "lump",
     "swelling", "dizziness", "vomit", "diarrhea", "shortness of breath",
-    "breathless", "chest", "headache"
+    "breathless", "chest", "headache", "migraine"
   ];
   if (symptomHints.some(h => t.includes(h))) return "symptom";
 
@@ -132,6 +140,11 @@ Task:
       max_output_tokens: 900
     };
 
+    if (!OPENAI_API_KEY) {
+      console.error("❌ Missing OPENAI_API_KEY.");
+      return res.status(500).json({ error: "Server misconfigured: missing OPENAI_API_KEY." });
+    }
+
     const resp = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -143,12 +156,12 @@ Task:
 
     if (!resp.ok) {
       const text = await resp.text();
+      console.error("❌ OpenAI HTTP error:", resp.status, text);
       return res.status(resp.status).json({ error: `OpenAI error: ${text}` });
     }
 
     const data = await resp.json();
 
-    // Normalize output for different Response API shapes
     const output =
       data.output_text ??
       data?.output?.[0]?.content?.[0]?.text ??
@@ -157,15 +170,18 @@ Task:
 
     res.json({ questionType, answer: output });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error." });
+    console.error("❌ Server error calling OpenAI:", err);
+    res.status(500).json({ error: "Server error while contacting OpenAI." });
   }
 });
 
-// Health check
-app.get("/", (_req, res) => res.send("Doc Adam Q&A API up"));
+// ====== Serve index.html from the same server (avoids file:// issues) ======
+app.use(express.static(path.join(__dirname))); // serve files from current dir
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
 
-// Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Listening on http://localhost:${PORT}`));
-
+app.listen(PORT, () => {
+  console.log(`✅ Server on http://localhost:${PORT}`);
+  console.log(`   Model: ${MODEL}`);
+});
