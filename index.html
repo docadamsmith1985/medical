@@ -6,7 +6,7 @@
   <title>Medical Q&A — general education only</title>
   <style>
     :root{
-      --bg:#fff; --fg:#111; --muted:#666; --panel:#f7f7f7;
+      --bg:#fff; --fg:#111; --muted:#555; --panel:#f7f7f7;
       --accent:#fff3cd; --accent-border:#ffe69c;
       --me:#eef6ff; --bot:#f5f5f5; --border:#e6e6e6;
     }
@@ -105,34 +105,22 @@
       chatEl.scrollTop = chatEl.scrollHeight;
     }
 
-    // Build a readable advice bubble from the structured response
+    // Build a readable advice bubble
     function formatAdvice(o){
-      const infoGaps = Array.isArray(o.info_gaps) ? o.info_gaps.slice(0,3) : [];
-      const watch = Array.isArray(o.urgent_triggers) ? o.urgent_triggers.slice(0,5) : [];
-      const disc = o.disclaimer || "Just a reminder: I’m not a substitute for a clinician, so I can’t give specific medical advice. I can outline common causes, what clinicians often check, and practical things people sometimes do while waiting to be seen.";
+      const txt = (o.advice_text || "").trim();
+      if (txt) return txt;
 
-      if (o.advice_text && o.advice_text.trim()) {
-        const txt = o.advice_text.trim();
-        const low = txt.toLowerCase();
-        const hasInfo  = low.includes("what to bring/track") || low.includes("info your doctor may ask/check");
-        const hasWatch = low.includes("watch-outs");
-        const extra = [];
-        if (infoGaps.length && !hasInfo)  extra.push(`\n\nWhat to bring/track:\n- ${infoGaps.join("\n- ")}`);
-        if (watch.length    && !hasWatch) extra.push(`\n\nWatch-outs (urgent):\n- ${watch.join("\n- ")}`);
-        return `${disc}\n\n${txt}${extra.join("")}`;
+      // Last-resort fallback (should rarely run)
+      const lines = [];
+      if (o.summary) lines.push("Quick take — " + o.summary);
+      if (Array.isArray(o.info_gaps) && o.info_gaps.length) {
+        lines.push("What to bring/track:\n- " + o.info_gaps.slice(0,3).join("\n- "));
       }
-
-      // Fallback builder
-      const bullet = (label, arr) => (Array.isArray(arr) && arr.length)
-        ? `${label}\n- ${arr.map(x => String(x)).join("\n- ")}` : "";
-      const parts = [
-        disc,
-        o.summary ? `Quick take — ${o.summary}` : "",
-        bullet("What to bring/track", infoGaps),
-        bullet("Watch-outs (urgent)", watch),
-        o.final_reminder || "If symptoms persist, worsen, or you’re unsure, arranging a timely clinic visit with a qualified clinician is sensible."
-      ].filter(Boolean);
-      return parts.join("\n\n");
+      if (Array.isArray(o.urgent_triggers) && o.urgent_triggers.length) {
+        lines.push("Watch-outs (urgent):\n- " + o.urgent_triggers.slice(0,5).join("\n- "));
+      }
+      lines.push(o.final_reminder || "If things aren’t improving or you’re unsure, arranging a timely clinic visit with a qualified clinician is sensible.");
+      return lines.join("\n\n");
     }
 
     // New topic
@@ -205,4 +193,5 @@
   </script>
 </body>
 </html>
+
 
